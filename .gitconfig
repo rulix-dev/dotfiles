@@ -1,3 +1,15 @@
 [user]
-        name = Raúl Pérez Clavero
-        email = 212502137+rulix-dev@users.noreply.github.com
+	name = Raúl Pérez Clavero
+	email = 212502137+rulix-dev@users.noreply.github.com
+	signingkey = key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9jjeM+jT7pdBPFqx0TmTfmww026yZK2pl8Vg5FsUTZ
+[commit]
+	gpgsign = true
+[gpg]
+ 	format = ssh
+# This is a url rewrite that helps [go and maybe rust] tooling that downloads libraries from our private repos
+[url "git@github.com:DataDog/"]
+        insteadOf = https://github.com/DataDog/
+
+# This ensures that the Datadog global githooks work.  Please don't override this in your own dotfiles unless you have a strong reason to.
+[core]
+        hooksPath = /home/bits/.global_hooks
