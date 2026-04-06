@@ -58,7 +58,7 @@ __rulix_dev_zsh_setup() {
     # fzf
     git -C "$HOME/.fzf" pull 2>/dev/null || \
       git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
-    ~/.fzf/install --all
+    ~/.fzf/install --bin
 
     # tmux plugins
     git -C "$HOME/.tmux/plugins/tpm" pull 2>/dev/null || \
