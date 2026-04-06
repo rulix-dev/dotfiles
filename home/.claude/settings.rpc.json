@@ -149,11 +149,9 @@
     "slack@claude-plugins-official": true,
     "gopls-lsp@claude-plugins-official": true,
     "swift-lsp@claude-plugins-official": true,
-    "dd@datadog-claude-plugins": true,
     "commit-commands@claude-plugins-official": true,
     "pr-review-toolkit@claude-plugins-official": true,
-    "code-simplifier@claude-plugins-official": true,
-    "marketplace-auto-update@datadog-claude-plugins": true
+    "code-simplifier@claude-plugins-official": true
   },
   "effortLevel": "high",
   "mcpServers": {
