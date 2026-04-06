@@ -9,4 +9,5 @@ if [ ! -d "$RULIX_DEV_HOME/dotfiles" ]; then
     git clone https://github.com/rulix-dev/dotfiles.git "$RULIX_DEV_HOME/dotfiles"
 fi
 
-
+mkdir -p $RULIX_DEV_HOME/dotfiles/target
+cp -fr $RULIX_DEV_HOME/dotfiles/home $RULIX_DEV_HOME/dotfiles/target

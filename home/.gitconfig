@@ -1,0 +1,13 @@
+[user]
+        email = 212502137+rulix-dev@users.noreply.github.com
+        name = Raúl Pérez Clavero
+
+[filter "lfs"]
+        clean = git-lfs clean -- %f
+        smudge = git-lfs smudge -- %f
+        process = git-lfs filter-process
+        required = true
+[include]
+        path = ~/.gitconfig.User
+[include]
+        path = ~/.gitconfig.Work

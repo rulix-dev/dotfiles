@@ -1,0 +1,77 @@
+[feature]
+        manyFiles = true
+[core]
+        fsmonitor = true
+[index]
+        threads = true
+[pull]
+        rebase = true
+[push]
+        autoSetupRemote = true
+        default = current
+[rebase]
+        autoStash = true
+        missingCommitsCheck = warn
+
+[alias]
+        l = log --all --graph --pretty=format:'%C(magenta)%h %C(white) %an %ar%C(auto) %D%n%s%n'
+        pl = log --graph --pretty=format:\"%Cred%H%Creset %Cgreen(%cI) -%C(yellow)%d%Creset %s %C(bold blue)%an <%ae>%Creset\" --abbrev-commit --author-date-order
+        plb = log --graph --pretty=format:\"%Cred%h%Creset %Cgreen(%cI) -%C(yellow)%d%Creset %s %C(bold blue)%an <%ae>%Creset\" --abbrev-commit --branches --author-date-order
+        g = grep -n
+        gone = "!f() { git fetch --all --prune; git branch -vv | awk '/: gone]/{print $1}' | xargs git branch -D; }; f"        
+        main = "!git checkout $(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')"
+        pp = pull --prune
+        ppg = "!git pp && git gone"
+        show-merge = "!f() { git diff $1^1 $1; }; f"
+        log-merge = "!f() { git log $1^1..$1 --oneline; }; f"
+
+[blame]
+        coloring = highlightRecent
+        date = relative
+
+[log]
+        abbrevCommit = true  # short commits
+        graphColors = blue,yellow,cyan,magenta,green,red
+
+[diff]
+        context = 3  # less context in diffs
+        renames = copies  # detect copies as renames in diffs
+        interHunkContext = 10  # merge near hunks in diffs
+
+[branch]
+        sort = -committerdate
+
+[tag]
+        sort = -taggerdate
+
+# Colors
+[color "blame"]
+        highlightRecent = black bold,1 year ago,white,1 month ago,default,7 days ago,blue
+
+[color "branch"]
+        current  = magenta
+        local = default
+        remote = yellow
+        upstream = green
+        plain = blue
+
+[color.decorate]
+        HEAD = red
+        branch = blue
+        tag = yellow
+        remoteBranch = magenta
+
+[interactive]
+        diffFilter = diff-so-fancy --patch
+        singlekey = true
+
+# Third-party: diff-so-fancy
+[diff-so-fancy]
+        markEmptyLines = false
+
+# URL shortcuts
+[url "git@github.com:"]
+        insteadOf = "gh:"
+
+[url "git@github.com:rulix-dev/"]
+        insteadOf = "rd:"

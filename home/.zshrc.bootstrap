@@ -1,0 +1,192 @@
+if [[ -f "/opt/homebrew/bin/brew" ]] then
+  # If you're using macOS, you'll want this enabled
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+fi
+
+# Set the directory we want to store zinit and plugins
+ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
+
+# Download Zinit, if it's not there yet
+if [ ! -d "$ZINIT_HOME" ]; then
+   mkdir -p "$(dirname $ZINIT_HOME)"
+   git clone https://github.com/zdharma-continuum/zinit.git "$ZINIT_HOME"
+fi
+
+# Source/Load zinit
+source "${ZINIT_HOME}/zinit.zsh"
+
+# Add in Powerlevel10k
+#zinit ice depth=1; zinit light romkatv/powerlevel10k
+
+# Add in zsh plugins
+zinit light zsh-users/zsh-syntax-highlighting
+zinit light zsh-users/zsh-completions
+zinit light zsh-users/zsh-autosuggestions
+zinit light Aloxaf/fzf-tab
+
+# Add in snippets
+zinit snippet OMZL::git.zsh
+zinit snippet OMZP::git
+zinit snippet OMZP::sudo
+zinit snippet OMZP::archlinux
+zinit snippet OMZP::aws
+zinit snippet OMZP::kubectl
+zinit snippet OMZP::kubectx
+zinit snippet OMZP::command-not-found
+
+#Load completions
+autoload -U compinit && compinit
+
+zinit cdreplay -q
+
+#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+export SDKMAN_DIR="$HOME/.sdkman"
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+
+# Keybindings
+#bindkey '^f' autosuggest-accept
+bindkey -e
+bindkey '^r' history-search-backward
+bindkey '^f' history-search-forward
+
+
+HISTSIZE=50000
+HISTFILE=~/.zsh_history
+SAVEHIST=$HISTSIZE
+HISTDUP=false
+setopt appendhistory
+setopt sharehistory
+setopt hist_ignore_space
+setopt hist_ignore_all_dups
+setopt hist_save_no_dups
+setopt hist_ignore_dups
+setopt hist_find_no_dups
+
+# Completion styling
+zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}'
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+zstyle ':completion:*' menu no
+zstyle ':fzf-tab:complete:cd:*' fzf-preview 'ls --color $realpath'
+zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
+
+## FZF Settings
+export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow --exclude .git --exclude node_modules'
+export FZF_CTRL_T_COMMAND=$FZF_DEFAULT_COMMAND
+export FZF_ALT_T_COMMAND=$FZF_DEFAULT_COMMAND
+
+export FZF_CTRL_T_OPTS="--preview 'bat --color=always -n --line-range :500 {}'"
+export FZF_ALT_T_OPTS="--preview 'eza --tree --color=always {}| head -200'"
+
+# BEGIN SCFW MANAGED BLOCK
+alias npm="scfw run npm"
+alias pip="scfw run pip"
+alias poetry="scfw run poetry"
+export SCFW_DD_AGENT_LOG_PORT="10365"
+export SCFW_DD_LOG_LEVEL="ALLOW"
+export SCFW_HOME="/Users/raul.perezclavero/.scfw"
+# END SCFW MANAGED BLOCK
+
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
+fpath=(~/.docker/completions $fpath)
+autoload -Uz compinit
+compinit
+# End of Docker CLI completions
+
+
+
+__rulix_dev_stow_dotfiles() {
+  local STOW_ROOT="$1"
+  [[ -n "$STOW_ROOT" ]] || { echo "ERROR: STOW_ROOT is empty" >&2; return 1; }
+  [[ -d "$STOW_ROOT" ]] || { echo "ERROR: '$STOW_ROOT' is not a valid directory" >&2; return 1; }
+  [[ -f "$STOW_ROOT/.zshrc" && ! -L "$STOW_ROOT/.zshrc" ]] || { echo "ERROR: '$STOW_ROOT/.zshrc' not found or is a symlink" >&2; return 1; }
+
+  local STOW_PARENT="$(dirname "$STOW_ROOT")"
+  local PACKAGE="$(basename "$STOW_ROOT")"
+
+  local DRY_RUN=false
+  if [[ "${2:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+  fi
+
+  local STOW_FLAGS=()
+  if $DRY_RUN; then
+    STOW_FLAGS+=(-n -v)
+  fi
+
+  # Pre-create directory structure in HOME so stow links files, not directories
+  find "$STOW_ROOT" -mindepth 1 -type d | while read -r dir; do
+    relative="${dir#"$STOW_ROOT"/}"
+    mkdir -p "$HOME/$relative"
+  done
+
+  # Remove existing files/symlinks in HOME that would conflict with stow
+  find "$STOW_ROOT" -type f | while read -r file; do
+    relative="${file#"$STOW_ROOT"/}"
+    target="$HOME/$relative"
+    if [[ -e "$target" || -L "$target" ]]; then
+      if $DRY_RUN; then
+        echo "REMOVE: $relative"
+      else
+        rm "$target"
+      fi
+    fi
+  done
+
+  stow -d "$STOW_PARENT" -t "$HOME" --override='.*' "${STOW_FLAGS[@]}" "$PACKAGE"
+}
+
+
+__rulix_dev_zsh_setup() {
+    if [[ -f "${HOME}/.zshrc.setup" ]]; then
+        return 0
+    fi
+
+    # Rust Installation
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
+
+    # zoxide
+    curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
+
+    # starship
+    sudo curl -sS https://starship.rs/install.sh | sh -s -- -y
+
+    # fzf
+    git -C "$HOME/.fzf" pull 2>/dev/null || \
+      git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
+    ~/.fzf/install --all
+
+    # tmux plugins
+    git -C "$HOME/.tmux/plugins/tpm" pull 2>/dev/null || \
+      git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
+    ~/.tmux/plugins/tpm/bin/install_plugins
+    tmux source-file ~/.tmux.conf
+
+    # Merge Claude Settings
+    __rulix_dev_merge_claude_settings
+
+    # stow dotfiles
+    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target"
+
+    # Create file to avoid setup next time
+    touch "${HOME}/.zshrc.setup"
+}
+
+__rulix_dev_merge_claude_settings() {
+  local base="$HOME/.claude/settings.json"
+  local overlay="$HOME/.claude/settings.rpc.json"
+
+  if [[ ! -f "$base" && ! -f "$overlay" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$base" && -f "$overlay" ]]; then
+    local merged
+    merged="$(jq -s '.[0] * .[1]' "$base" "$overlay")" || return 1
+    echo "$merged" > "$base"
+  fi
+}
+
+__rulix_dev_zsh_setup
+
+

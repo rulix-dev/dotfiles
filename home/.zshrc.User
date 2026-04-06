@@ -1,0 +1,154 @@
+
+## Unsetting context to make sure every time the context is needed (avoid accidental commands)
+kubectl config unset current-context
+
+alias ls='ls --color'
+alias tmux4="open -na Ghostty.app --args -e ~/.local/bin/tmux4"
+
+fuzzygrep() {
+  grep -rnI "$1" . | \
+    fzf --delimiter : \
+        --preview 'bat --style=numbers --color=always --highlight-line {2} {1}' \
+        --preview-window=70% --bind shift-up:preview-page-up,shift-down:preview-page-down
+}
+
+fzfgrep() {
+	fzf --preview "grep --color=always -C 10 $1 {}"
+}
+
+todate() {
+  local seconds="$1"
+  local nanos="${2:-0}"
+
+  if [[ -z "$seconds" ]]; then
+    echo "Uso: ts2date <seconds> [nanos]" >&2
+    return 1
+  fi
+
+  # Convertir nanosegundos a fracción de segundo
+  local frac=""
+  if [[ "$nanos" -ne 0 ]]; then
+    frac=".$(printf '%09d' "$nanos")"
+  fi
+
+  # GNU date (Linux) vs BSD date (macOS)
+  if date -d @0 >/dev/null 2>&1; then
+    # Linux
+    date -u -d "@${seconds}" +"%Y-%m-%dT%H:%M:%S${frac}Z"
+  else
+    # macOS
+    date -u -r "${seconds}" +"%Y-%m-%dT%H:%M:%S${frac}Z"
+  fi
+}
+
+tots() {
+  if [[ -z "$1" ]]; then
+    echo "Uso: date2ts <fecha>" >&2
+    return 1
+  fi
+
+  local input="$*"
+
+  # GNU date (Linux) vs BSD date (macOS)
+  if date -d "1970-01-01" >/dev/null 2>&1; then
+    # Linux
+    date -u -d "$input" +%s
+  else
+    # macOS
+    date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "$input" +%s 2>/dev/null \
+    || date -u -j -f "%Y-%m-%dT%H:%M:%S" "$input" +%s
+  fi
+}
+
+
+__rulix_dev_stow_dotfiles() {
+  local STOW_ROOT="$1"
+  [[ -n "$STOW_ROOT" ]] || { echo "ERROR: STOW_ROOT is empty" >&2; return 1; }
+  [[ -d "$STOW_ROOT" ]] || { echo "ERROR: '$STOW_ROOT' is not a valid directory" >&2; return 1; }
+  [[ -f "$STOW_ROOT/.zshrc" && ! -L "$STOW_ROOT/.zshrc" ]] || { echo "ERROR: '$STOW_ROOT/.zshrc' not found or is a symlink" >&2; return 1; }
+
+  local STOW_PARENT="$(dirname "$STOW_ROOT")"
+  local PACKAGE="$(basename "$STOW_ROOT")"
+
+  local DRY_RUN=false
+  if [[ "${2:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+  fi
+
+  local STOW_FLAGS=()
+  if $DRY_RUN; then
+    STOW_FLAGS+=(-n -v)
+  fi
+
+  # Pre-create directory structure in HOME so stow links files, not directories
+  find "$STOW_ROOT" -mindepth 1 -type d | while read -r dir; do
+    relative="${dir#"$STOW_ROOT"/}"
+    mkdir -p "$HOME/$relative"
+  done
+
+  # Remove existing files/symlinks in HOME that would conflict with stow
+  find "$STOW_ROOT" -type f | while read -r file; do
+    relative="${file#"$STOW_ROOT"/}"
+    target="$HOME/$relative"
+    if [[ -e "$target" || -L "$target" ]]; then
+      if $DRY_RUN; then
+        echo "REMOVE: $relative"
+      else
+        rm "$target"
+      fi
+    fi
+  done
+
+  stow -d "$STOW_PARENT" -t "$HOME" --override='.*' "${STOW_FLAGS[@]}" "$PACKAGE"
+}
+
+
+__rulix_dev_zsh_setup() {
+    if [[ -f "${HOME}/.zshrc.setup" ]]; then
+        return 0
+    fi
+
+    # Rust Installation
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
+
+    # zoxide
+    curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
+
+    # starship
+    sudo curl -sS https://starship.rs/install.sh | sh -s -- -y
+
+    # fzf
+    git -C "$HOME/.fzf" pull 2>/dev/null || \
+      git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
+    ~/.fzf/install --all
+
+    # tmux plugins
+    git -C "$HOME/.tmux/plugins/tpm" pull 2>/dev/null || \
+      git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
+    ~/.tmux/plugins/tpm/bin/install_plugins
+    tmux source-file ~/.tmux.conf
+
+    # Merge Claude Settings
+    __rulix_dev_merge_claude_settings
+
+    # Create file to avoid setup next time
+    touch "${HOME}/.zshrc.setup"
+}
+
+__rulix_dev_merge_claude_settings() {
+  local base="$HOME/.claude/settings.json"
+  local overlay="$HOME/.claude/settings.rpc.json"
+
+  if [[ ! -f "$base" && ! -f "$overlay" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$base" && -f "$overlay" ]]; then
+    local merged
+    merged="$(jq -s '.[0] * .[1]' "$base" "$overlay")" || return 1
+    echo "$merged" > "$base"
+  fi
+}
+
+__rulix_dev_zsh_setup
+
