@@ -1,0 +1,7 @@
+
+claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp
+claude mcp add --transport http --scope user figma-mcp https://mcp.figma.com/mcp
+claude mcp add --transport http --scope user datadog "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp?toolsets=core,workflows,widgets,dashboards,search,software-delivery"
+claude mcp add --transport stdio --scope user chrome-devtools -- npx chrome-devtools-mcp@latest --isolated=true
+claude mcp add --transport http --scope user google-workspace https://google-workspace-mcp-server-834963730936.us-central1.run.app/mcp 
+claude mcp add --transport http --scope user slack https://mcp.slack.com/mcp --client-id 1601185624273.8899143856786 --callback-port 3118 || true

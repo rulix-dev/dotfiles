@@ -101,6 +101,8 @@ __rulix_dev_zsh_setup
 
 [[ -s "$HOME/.zshrc.User" ]] && source "$HOME/.zshrc.User"
 
+[[ -s "$HOME/.zshrc.Claude" ]] && source "$HOME/.zshrc.Claude"
+
 for f in "$HOME"/.zshrc.dd*; do
     [[ -s "$f" ]] && source "$f"
 done
