@@ -65,11 +65,11 @@ __rulix_dev_zsh_setup() {
       git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
     ~/.tmux/plugins/tpm/bin/install_plugins
 
-    # Merge Claude Settings
-    __rulix_dev_merge_claude_settings
-
     # stow dotfiles
     __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target/home"
+
+    # Merge Claude Settings
+    __rulix_dev_merge_claude_settings
 
     # Create file to avoid setup next time
     touch "${HOME}/.zshrc.setup"
