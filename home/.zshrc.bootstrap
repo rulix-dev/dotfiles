@@ -87,6 +87,8 @@ __rulix_dev_merge_claude_settings() {
     local merged
     merged="$(jq -s '.[0] * .[1]' "$base" "$overlay")" || return 1
     echo "$merged" > "$base"
+  elif [[ ! -f "$base" && -f "$overlay" ]]; then
+    cp "$overlay" "$base"
   fi
 }
 
