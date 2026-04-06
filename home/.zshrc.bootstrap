@@ -64,7 +64,6 @@ __rulix_dev_zsh_setup() {
     git -C "$HOME/.tmux/plugins/tpm" pull 2>/dev/null || \
       git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
     ~/.tmux/plugins/tpm/bin/install_plugins
-    tmux source-file ~/.tmux.conf
 
     # Merge Claude Settings
     __rulix_dev_merge_claude_settings
@@ -103,6 +102,9 @@ for f in "$HOME"/.zshrc.dd*; do
 done
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+# tmux reload
+tmux source-file ~/.tmux.conf
 
 # Shell integrations
 eval "$(fzf --zsh)"
