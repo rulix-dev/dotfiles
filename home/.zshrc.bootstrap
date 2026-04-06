@@ -166,7 +166,7 @@ __rulix_dev_zsh_setup() {
     __rulix_dev_merge_claude_settings
 
     # stow dotfiles
-    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target"
+    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target/home"
 
     # Create file to avoid setup next time
     touch "${HOME}/.zshrc.setup"
