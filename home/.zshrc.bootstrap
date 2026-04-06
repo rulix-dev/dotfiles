@@ -60,13 +60,15 @@ __rulix_dev_zsh_setup() {
       git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
     ~/.fzf/install --bin
 
+    # stow dotfiles
+    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target/home"
+
     # tmux plugins
     git -C "$HOME/.tmux/plugins/tpm" pull 2>/dev/null || \
       git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
     ~/.tmux/plugins/tpm/bin/install_plugins
-
-    # stow dotfiles
-    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target/home"
+    # tmux reload
+    tmux source-file ~/.tmux.conf
 
     # Merge Claude Settings
     __rulix_dev_merge_claude_settings
@@ -105,8 +107,6 @@ done
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
-# tmux reload
-tmux source-file ~/.tmux.conf
 
 # Shell integrations
 eval "$(fzf --zsh)"
