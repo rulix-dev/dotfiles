@@ -74,9 +74,10 @@ __rulix_dev_zsh_setup() {
     gh extension install dlvhdr/gh-dash
 
     go install github.com/joshmedeski/sesh/v2@latest
+    sudo ln -sfn $HOME/go/bin/sesh /usr/local/bin/sesh
 
     go install github.com/charmbracelet/gum@latest
-
+    sudo ln -sfn $HOME/go/bin/gum /usr/local/bin/gum
 
     # Merge Claude Settings
     __rulix_dev_merge_claude_settings
