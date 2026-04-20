@@ -70,6 +70,14 @@ __rulix_dev_zsh_setup() {
     # tmux reload
     tmux source-file ~/.tmux.conf
 
+    # gh dash
+    gh extension install dlvhdr/gh-dash
+
+    go install github.com/joshmedeski/sesh/v2@latest
+
+    go install github.com/charmbracelet/gum@latest
+
+
     # Merge Claude Settings
     __rulix_dev_merge_claude_settings
 
@@ -108,6 +116,11 @@ for f in "$HOME"/.zshrc.dd*; do
 done
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+# tmux reload
+~/.tmux/plugins/tpm/bin/install_plugins
+# tmux reload
+tmux source-file ~/.tmux.conf
 
 
 # Shell integrations
