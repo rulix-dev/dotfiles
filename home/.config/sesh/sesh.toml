@@ -1,3 +1,7 @@
+#:schema https://github.com/joshmedeski/sesh/raw/main/sesh.schema.json
+
+dir_length = 2
+
 sort_order = [
     "tmuxinator", # show first
     "config",
@@ -5,12 +9,10 @@ sort_order = [
     "zoxide", # show last
 ]
 
-
 [[session]]
 name = "Downloads 📥"
 path = "~/Downloads"
 startup_command = "ls"
-
 
 [[session]]
 name = "tmux config"

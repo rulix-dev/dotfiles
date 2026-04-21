@@ -1,10 +1,10 @@
 
+echo ".zshrc.User: PATH=$PATH"
+
 ## Unsetting context to make sure every time the context is needed (avoid accidental commands)
 kubectl config unset current-context
-export PATH="$HOME/go/bin:$PATH"
 
 alias ls='ls --color'
-alias tmux4="open -na Ghostty.app --args -e ~/.local/bin/tmux4"
 
 fuzzygrep() {
   grep -rnI "$1" . | \
@@ -62,3 +62,21 @@ tots() {
 }
 
 
+
+
+function sesh-sessions() {
+  {
+    exec </dev/tty
+    exec <&1
+    local session
+    session=$(sesh list -i | fzf --height 40% --reverse --ansi --border-label ' sesh ' --border --prompt '⚡  ')
+    zle reset-prompt > /dev/null 2>&1 || true
+    [[ -z "$session" ]] && return
+    sesh connect $session
+  }
+}
+
+zle     -N             sesh-sessions
+bindkey -M emacs '\es' sesh-sessions
+bindkey -M vicmd '\es' sesh-sessions
+bindkey -M viins '\es' sesh-sessions

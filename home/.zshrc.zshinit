@@ -1,3 +1,5 @@
+echo ".zshrc.zshinit: PATH=$PATH"
+
 if [[ -f "/opt/homebrew/bin/brew" ]] then
   # If you're using macOS, you'll want this enabled
   eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -43,6 +45,8 @@ zinit cdreplay -q
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 
+# GO User tools
+export PATH="$HOME/go/bin:$PATH"
 
 # Keybindings
 #bindkey '^f' autosuggest-accept

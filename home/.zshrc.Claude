@@ -1,12 +1,28 @@
+echo ".zshrc.Claude: PATH=$PATH"
 
-claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp
-claude mcp add --transport http --scope user figma-mcp https://mcp.figma.com/mcp
-claude mcp add --transport http --scope user datadog "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp?toolsets=core,workflows,widgets,dashboards,search,software-delivery"
-claude mcp add --transport stdio --scope user chrome-devtools -- npx chrome-devtools-mcp@latest --isolated=true
-claude mcp add --transport http --scope user google-workspace https://google-workspace-mcp-server-834963730936.us-central1.run.app/mcp 
-claude mcp add --transport http --scope user slack https://mcp.slack.com/mcp --client-id 1601185624273.8899143856786 --callback-port 3118 || true
-
-## Claude alias to resume a session by name or create it if it does not exist
 claude_session() {
-  claude --resume "$1" 2>/dev/null || claude --name "$1"
+  local dir="$1"
+  local name="$2"
+  [[ -z "$dir" || -z "$name" ]] && { echo "Usage: claude_session <directory> <name>"; return 1; }
+
+  local abs_dir
+  abs_dir="$(cd "$dir" 2>/dev/null && pwd)" || { echo "Error: directory '$dir' does not exist"; return 1; }
+
+  local project_dir="$HOME/.claude/projects/$(echo $abs_dir | tr '/' '-' | tr '.' '-')"
+
+  local session_id=""
+  if [[ -d "$project_dir" ]]; then
+    session_id=$(grep -l "\"customTitle\":\"$name\"" "$project_dir"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl)
+  fi
+
+  local original_dir="$PWD"
+  cd "$abs_dir"
+
+  if [[ -n "$session_id" ]]; then
+    claude --resume "$session_id"
+  else
+    claude --name "$name"
+  fi
+
+  cd "$original_dir"
 }
