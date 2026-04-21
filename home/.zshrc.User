@@ -1,6 +1,4 @@
 
-echo ".zshrc.User: PATH=$PATH"
-
 ## Unsetting context to make sure every time the context is needed (avoid accidental commands)
 kubectl config unset current-context
 
@@ -60,9 +58,6 @@ tots() {
     || date -u -j -f "%Y-%m-%dT%H:%M:%S" "$input" +%s
   fi
 }
-
-
-
 
 function sesh-sessions() {
   {

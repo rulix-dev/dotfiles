@@ -1,6 +1,4 @@
 
-echo ".zshrc.bootstrap: PATH=$PATH"
-
 __rulix_dev_stow_dotfiles() {
   local STOW_ROOT="$1"
   [[ -n "$STOW_ROOT" ]] || { echo "ERROR: STOW_ROOT is empty" >&2; return 1; }

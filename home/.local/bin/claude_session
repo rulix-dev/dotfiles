@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dir="${1:-}"
+name="${2:-}"
+
+if [[ -z "$dir" || -z "$name" ]]; then
+  echo "Usage: claude_session <directory> <name>" >&2
+  exit 1
+fi
+
+abs_dir="$(cd "$dir" 2>/dev/null && pwd)" || { echo "Error: directory '$dir' does not exist" >&2; exit 1; }
+
+project_dir="$HOME/.claude/projects/$(echo "$abs_dir" | tr '/' '-' | tr '.' '-')"
+
+session_id=""
+if [[ -d "$project_dir" ]]; then
+  session_id=$(grep -l "\"customTitle\":\"$name\"" "$project_dir"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl)
+fi
+
+cd "$abs_dir"
+
+if [[ -n "$session_id" ]]; then
+  claude --resume "$session_id"
+else
+  claude --name "$name"
+fi
