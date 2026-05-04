@@ -59,15 +59,130 @@ tots() {
   fi
 }
 
+_GOT_NAMES=(
+  # House Stark
+  eddard_stark robb_stark sansa_stark arya_stark bran_stark rickon_stark
+  catelyn_stark jon_snow benjen_stark lyanna_stark rickard_stark
+  # House Lannister
+  tywin_lannister cersei_lannister jaime_lannister tyrion_lannister
+  kevan_lannister lancel_lannister tommen_baratheon myrcella_baratheon
+  joffrey_baratheon
+  # House Targaryen (GoT)
+  daenerys_targaryen viserys_targaryen rhaegar_targaryen aerys_targaryen
+  aemon_targaryen maester_aemon
+  # House Baratheon
+  robert_baratheon stannis_baratheon renly_baratheon gendry_baratheon
+  shireen_baratheon selyse_baratheon
+  # House Greyjoy
+  balon_greyjoy theon_greyjoy yara_greyjoy euron_greyjoy aeron_greyjoy
+  victarion_greyjoy
+  # House Tyrell
+  mace_tyrell margaery_tyrell loras_tyrell olenna_tyrell
+  # House Martell
+  doran_martell oberyn_martell ellaria_sand trystane_martell arianne_martell
+  obara_sand nymeria_sand tyene_sand
+  # House Tully
+  hoster_tully edmure_tully brynden_tully lysa_arryn
+  # House Arryn
+  jon_arryn robin_arryn
+  # House Bolton
+  roose_bolton ramsay_bolton
+  # House Frey
+  walder_frey lothar_frey black_walder
+  # House Tarly
+  samwell_tarly randyll_tarly dickon_tarly
+  # House Mormont
+  jeor_mormont jorah_mormont lyanna_mormont maege_mormont
+  # House Reed
+  howland_reed meera_reed jojen_reed
+  # House Karstark
+  rickard_karstark alys_karstark harald_karstark
+  # House Umber
+  greatjon_umber smalljon_umber
+  # House Clegane
+  gregor_clegane sandor_clegane
+  # House Tarth
+  brienne_tarth selwyn_tarth
+  # House Seaworth
+  davos_seaworth matthos_seaworth
+  # House Baelish
+  petyr_baelish
+  # House Dondarrion
+  beric_dondarrion
+  # Night's Watch & Free Folk
+  tormund_giantsbane ygritte_freefolk mance_rayder craster_freefolk
+  gilly_craster eddison_tollett alliser_thorne
+  # Other notable characters
+  melisandre_asshai varys_spider missandei_naath grey_worm daario_naharis
+  bronn_blackwater podrick_payne qyburn_maester hot_pie hodor_stark
+  osha_wildling shae_lorathi ros_redkeep syrio_forel jaqen_hghar
+  # House Hightower (HotD)
+  otto_hightower alicent_hightower hobert_hightower
+  # House Targaryen (HotD)
+  viserys_first aegon_second rhaenyra_targaryen daemon_targaryen
+  aemond_targaryen helaena_targaryen daeron_targaryen jace_velaryon
+  luke_velaryon joffrey_velaryon aegon_third viserys_second baela_targaryen
+  rhaena_targaryen rhaenys_targaryen
+  # House Velaryon (HotD)
+  corlys_velaryon laenor_velaryon laena_velaryon
+  # House Strong (HotD)
+  lyonel_strong harwin_strong larys_strong
+  # House Celtigar (HotD)
+  bartimos_celtigar
+  # House Blackwood & Bracken (HotD)
+  samwell_blackwood amos_bracken
+  # House Peake (HotD)
+  unwin_peake
+  # Other HotD characters
+  criston_cole mysaria_white_worm erryk_cargyll arryk_cargyll
+  hugh_hammer ulf_white addam_velaryon nettles_dragonrider
+  dalton_greyjoy johanna_lannister simon_dondarrion
+)
+
+_got_random_name() {
+  local name
+  while true; do
+    name="${_GOT_NAMES[$((RANDOM % ${#_GOT_NAMES[@]} + 1))]}"
+    # Ensure no existing tmux session has this name
+    if ! tmux has-session -t "$name" 2>/dev/null; then
+      echo "$name"
+      return
+    fi
+  done
+}
+
 function sesh-sessions() {
   {
     exec </dev/tty
     exec <&1
     local session
-    session=$(sesh list -i | fzf --height 40% --reverse --ansi --border-label ' sesh ' --border --prompt '⚡  ')
+    session=$(
+      (echo "⊕ New session"; sesh list -i) | \
+      fzf --height 40% --reverse --ansi \
+        --border-label ' sesh ' --border \
+        --prompt '⚡  ' \
+        --header '  ^a all ^t tmux ^g configs ^x zoxide ^d tmux kill ^f find' \
+        --bind 'tab:down,btab:up' \
+        --bind 'ctrl-a:change-prompt(⚡  )+reload(echo "⊕ New session"; sesh list -i)' \
+        --bind 'ctrl-t:change-prompt(🪟  )+reload(echo "⊕ New session"; sesh list -t -i)' \
+        --bind 'ctrl-g:change-prompt(⚙️  )+reload(sesh list -c -i)' \
+        --bind 'ctrl-x:change-prompt(📁  )+reload(sesh list -z -i)' \
+        --bind 'ctrl-f:change-prompt(🔎  )+reload(fd -H -d 2 -t d -E .Trash . ~)' \
+        --bind 'ctrl-d:execute(tmux kill-session -t {2..})+change-prompt(⚡  )+reload(echo "⊕ New session"; sesh list -i)'
+    )
     zle reset-prompt > /dev/null 2>&1 || true
     [[ -z "$session" ]] && return
-    sesh connect $session
+
+    if [[ "$session" == "⊕ New session" ]]; then
+      local name
+      local suggestion=$(_got_random_name)
+      printf "Session name [%s]: " "$suggestion"
+      read -r name
+      [[ -z "$name" ]] && name="$suggestion"
+      tmux new-session -d -s "$name" && tmux attach-session -t "$name"
+    else
+      sesh connect "$session"
+    fi
   }
 }
 
@@ -75,3 +190,8 @@ zle     -N             sesh-sessions
 bindkey -M emacs '\es' sesh-sessions
 bindkey -M vicmd '\es' sesh-sessions
 bindkey -M viins '\es' sesh-sessions
+
+## Auto-launch sesh picker on new terminal
+if [[ -z "$TMUX" ]] && command -v sesh &>/dev/null; then
+  sesh-sessions
+fi
