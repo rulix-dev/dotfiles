@@ -92,7 +92,32 @@ git worktree add ../<repo>-<TASK_SLUG> -b raul.perezclavero/<TASK_SLUG>
 - If the worktree path already exists → reuse it; verify the branch matches. If branch differs, surface and ask.
 - If the branch already exists locally or upstream → use `git worktree add ../<repo>-<TASK_SLUG> raul.perezclavero/<TASK_SLUG>` (no `-b`).
 
-### 7. Hand off to the implementation flow
+### 7. Create (or update) the VS Code workspace file
+
+Create `$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace` if it doesn't exist yet. Also create or refresh it mid-task if you notice it is missing.
+
+The file must include, in order:
+
+1. The workspace folder itself: `$HOME/w/<TASK_SLUG>`
+2. One entry per worktree: `$HOME/dd/<repo>-<TASK_SLUG>`
+
+Template (replace variables, use absolute paths):
+
+```json
+{
+  "folders": [
+    { "path": "~/w/<TASK_SLUG>" },
+    { "path": "~/dd/<repo>-<TASK_SLUG>" }
+  ],
+  "settings": {}
+}
+```
+
+- If there are **multiple repos**, add one `folders` entry per worktree after the workspace folder entry.
+- If the file already exists and a new repo/worktree is added later, **update** the file to include the new path.
+- After writing the file, print the path so the user can open it directly: `open ~/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace` (or suggest `cursor ~/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace` if in a Cursor session).
+
+### 8. Hand off to the implementation flow
 
 After setup, walk the user through:
 
