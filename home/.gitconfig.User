@@ -2,6 +2,7 @@
         manyFiles = true
 [core]
         fsmonitor = true
+        excludesFile = ~/.gitignore_global
 [index]
         threads = true
 [pull]
