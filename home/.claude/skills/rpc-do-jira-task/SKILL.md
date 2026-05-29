@@ -1,165 +1,133 @@
 ---
 name: rpc-do-jira-task
-description: Bootstrap and run a JIRA-driven engineering task end-to-end. Reads the ticket, sets up workspace folder, tmux session and per-repo git worktrees, then guides explore → plan → test (TDD) → implement → commit/PR. Never commits or pushes unless explicitly asked.
+description: Implement a JIRA-driven engineering task inside an already-bootstrapped environment — explore → plan → test (TDD) → implement → commit/PR. Assumes the workspace folder, tmux session, branch and worktrees already exist (created by rpc-handoff-jira-task); if they don't, it points you there first. Never commits or pushes unless explicitly asked.
 ---
 
 # rpc-do-jira-task
 
-Take a JIRA ticket and bootstrap the full working environment for it (folder, tmux session, git worktrees), then walk the user through the implementation flow.
+Take a JIRA ticket whose working environment is already set up and walk through
+the implementation flow. **Environment setup (folder, tmux session, Claude
+session, branch, worktrees, VS Code workspace) is owned by
+`rpc-handoff-jira-task`** — this skill does the actual work.
 
 ## Invocation
 
 The skill is invoked as `/rpc-do-jira-task [JIRA-ID]`.
 
 - If `JIRA-ID` is provided → fetch it via the Atlassian MCP and proceed.
-- If `JIRA-ID` is missing → engage the user:
-  1. Ask for a short description of the work.
-  2. Ask which JIRA project / issue type / components apply.
-  3. Create the issue via `mcp__atlassian__createJiraIssue`.
-  4. Use the returned ID and title from then on.
+- If `JIRA-ID` is missing → ask for it (or create the ticket via
+  `mcp__atlassian__createJiraIssue` if it doesn't exist yet), then proceed.
 
 Do not proceed without a real JIRA ID.
 
 ## Canonical task slug
 
-For a ticket `<JIRA-ID>` (e.g. `SDCD-2541`) and a derived `<short-desc>` (e.g. `cd-vis-scaffolding`), define:
+This skill reuses the canonical `TASK_SLUG` and the paths/branch derived from
+it. **The authoritative definition lives in `rpc-handoff-jira-task`** (the
+"Canonical task slug" table); do not redefine it here. As a reminder:
 
 ```
-TASK_SLUG = <JIRA-ID>-<short-desc>     e.g. SDCD-2541-cd-vis-scaffolding
+TASK_SLUG = <JIRA-ID>-<short-desc>   →  folder $HOME/w/<TASK_SLUG>,
+worktree $HOME/dd/<repo>-<TASK_SLUG>, branch raul.perezclavero/<TASK_SLUG>
 ```
 
-The same slug is reused everywhere for consistency:
+Resolve `TASK_SLUG` from the existing workspace folder:
+`ls -d $HOME/w/*<JIRA-ID>* 2>/dev/null` → its basename is the slug. If there is more than one match, ask the user to choose. If there are no matches, stop and run
+`/rpc-handoff-jira-task <JIRA-ID>` first to bootstrap the environment, then come back here.
 
-| Where               | Value                                  |
-| ------------------- | -------------------------------------- |
-| Workspace folder    | `$HOME/w/<TASK_SLUG>`                  |
-| tmux session name   | `<TASK_SLUG>`                          |
-| Worktree dir        | `$HOME/dd/<repo>-<TASK_SLUG>`          |
-| Git branch          | `raul.perezclavero/<TASK_SLUG>`        |
+## 0. Verify the environment exists
 
-`<short-desc>` is derived from the JIRA title: lowercase, words joined with `-`, drop articles/filler, keep it short (~3–5 tokens). Confirm the slug with the user the first time you compute it.
+Before implementing, confirm the assets are in place:
+
+- Workspace folder `$HOME/w/<TASK_SLUG>` exists.
+- A worktree `$HOME/dd/<repo>-<TASK_SLUG>` exists on branch
+  `raul.perezclavero/<TASK_SLUG>`.
+
+If any of these are **missing**, stop and run **`/rpc-handoff-jira-task
+<JIRA-ID>`** first to bootstrap the environment, then come back. Do not
+re-create assets ad hoc here.
 
 ## Step-by-step flow
 
 ### 1. Resolve the JIRA ticket
 
-- Fetch the ticket via `mcp__atlassian__getJiraIssue` (or create it if missing — see Invocation).
-- Print a concise summary: title, status, assignee, priority, components, and the rendered description.
-- Ask the user: **"Anything else I should know before we start?"** Wait for an answer before moving on.
+- Fetch the ticket via `mcp__atlassian__getJiraIssue`.
+- Print a concise summary: title, status, assignee, priority, components, and
+  the rendered description.
+- Ask the user: **"Anything else I should know before we start?"** Wait for an
+  answer before moving on.
 
-### 2. Resolve the workspace folder
+### 2. Explore
 
-- Search `$HOME/w` for any folder whose name **contains** `<JIRA-ID>` (e.g. `ls -d $HOME/w/*<JIRA-ID>* 2>/dev/null`).
-- If a match exists → reuse it. Its existing name wins over a freshly-derived `<short-desc>` (avoids drift). Set `TASK_SLUG` = basename of that folder.
-- If no match → derive `<short-desc>` from the title, confirm with the user, then `mkdir -p $HOME/w/<TASK_SLUG>`.
-- `cd` into the folder.
+- Read the relevant code in the worktree(s); share a short map of what's
+  relevant to the ticket.
 
-### 3. Rename the tmux session
+### 3. Plan
 
-- Detect tmux via the `$TMUX` env var.
-- If set and the current session name differs from `<TASK_SLUG>`:
-  ```
-  tmux rename-session <TASK_SLUG>
-  ```
-- If `$TMUX` is unset → skip silently. Do not start a new tmux session.
+- Propose a plan and get **explicit user agreement** before writing any code.
 
-### 4. Determine the target repo(s)
+### 4. Test (TDD)
 
-- Infer candidate repos from the ticket text (title, description, components, "affects" hints).
-- Repos live under `$HOME/dd/` (e.g. `dd-go`, `dd-source`, `k8s-resources`, `web-ui`, `logs-backend`). Other locations are possible — fall back to asking when unsure.
-- Present the inferred list to the user and ask for confirmation/corrections **before** touching anything on disk.
+- Write failing tests first whenever feasible. If TDD doesn't fit a step, say so and why.
 
-### 5. Update each target repo
+### 5. Implement
 
-For each confirmed `<repo>`:
+- Make the tests pass.
 
-1. `cd $HOME/dd/<repo>`
-2. `git main` — user's alias that switches to `main` or `master` as appropriate.
-3. `git pull`
+### 6. Commit / PR
 
-If a step fails (uncommitted changes, conflicts, etc.), stop and surface it. Do **not** stash, reset, or discard work to "fix" it.
-
-### 6. Create a worktree per repo
-
-For each `<repo>`:
-
-```
-git worktree add ../<repo>-<TASK_SLUG> -b raul.perezclavero/<TASK_SLUG>
-```
-
-- Worktree path: `$HOME/dd/<repo>-<TASK_SLUG>` (sibling of the repo).
-- Branch name: `raul.perezclavero/<TASK_SLUG>`.
-- If the worktree path already exists → reuse it; verify the branch matches. If branch differs, surface and ask.
-- If the branch already exists locally or upstream → use `git worktree add ../<repo>-<TASK_SLUG> raul.perezclavero/<TASK_SLUG>` (no `-b`).
-
-### 7. Create (or update) the VS Code workspace file
-
-Create `$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace` if it doesn't exist yet. Also create or refresh it mid-task if you notice it is missing.
-
-The file must include, in order:
-
-1. The workspace folder itself: `$HOME/w/<TASK_SLUG>`
-2. One entry per worktree: `$HOME/dd/<repo>-<TASK_SLUG>`
-
-Template (replace variables, use absolute paths):
-
-```json
-{
-  "folders": [
-    { "path": "~/w/<TASK_SLUG>" },
-    { "path": "~/dd/<repo>-<TASK_SLUG>" }
-  ],
-  "settings": {}
-}
-```
-
-- If there are **multiple repos**, add one `folders` entry per worktree after the workspace folder entry.
-- If the file already exists and a new repo/worktree is added later, **update** the file to include the new path.
-- After writing the file, print the path so the user can open it directly: `open ~/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace` (or suggest `cursor ~/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace` if in a Cursor session).
-
-### 8. Hand off to the implementation flow
-
-After setup, walk the user through:
-
-1. **Explore** — read the relevant code, share a short map of what's relevant.
-2. **Plan** — propose a plan, get explicit user agreement before writing code.
-3. **Test (TDD)** — write failing tests first whenever feasible. If TDD doesn't fit a step, say so and why.
-4. **Implement** — make the tests pass.
-5. **Commit / PR** — only when the user explicitly asks. See rules below.
+- Only when the user explicitly asks. See Hard rules below.
 
 ## Hard rules
 
-- **No commits, no pushes, no PRs unless the user explicitly asks.** Even after green tests, stop and wait.
-- **Commit message format** (when asked): single line `<JIRA-ID>: <short description>`. No co-author trailers. No multi-line body. No file lists.
-- **Branch naming** is fixed: `raul.perezclavero/<TASK_SLUG>`. Never invent variations.
-- **Go**: after editing `.go` files, run `go fmt` on the changed files. In Bazel-using repos (e.g. `dd-source`):
-  - Use Bazel tooling instead of raw `go` (use the `running-bzl` agent for Bazel commands).
+- **No commits, no pushes, no PRs unless the user explicitly asks.** Even after
+  green tests, stop and wait.
+- **Commit message format** (when asked): single line `<JIRA-ID>: <short
+  description>`. No co-author trailers. No multi-line body. No file lists.
+- **Branch naming** is fixed: `raul.perezclavero/<TASK_SLUG>`. Never invent
+  variations.
+- **Go**: after editing `.go` files, run `go fmt` on the changed files. In
+  Bazel-using repos (e.g. `dd-source`):
+  - Use Bazel tooling instead of raw `go` (use the `running-bzl` agent for
+    Bazel commands).
   - Use the `:all` target wildcard for tests, not `...`.
   - After import changes: `bzl run //:gazelle -- update <dir>`.
-- **Diffs**: when running inside a VSCode/Cursor terminal, prefer `code --diff` / `cursor --diff` over plain text dumps.
+- **Diffs**: when running inside a VSCode/Cursor terminal, prefer `code --diff`
+  / `cursor --diff` over plain text dumps.
 
 ## Integrating to staging
 
 When the user asks to integrate changes to staging:
 
 1. Identify the affected service(s):
-   - First, look at the PR's labels. PRs are often auto-tagged with `changes:<service>`-style labels by CI. Read them with:
+   - First, look at the PR's labels. PRs are often auto-tagged with
+     `changes:<service>`-style labels by CI. Read them with:
      ```
      gh pr view <pr> --json labels
      ```
-   - If labels are missing or ambiguous, propose the service(s) you'd guess from the diff and **ask the user** to confirm or correct.
+   - If labels are missing or ambiguous, propose the service(s) you'd guess from
+     the diff and **ask the user** to confirm or correct.
 2. Post a PR comment per service:
    ```
    gh pr comment <pr> --body "/integrate -dfs <service-name>"
    ```
-3. A single PR may span multiple services — post one comment per service unless the user says otherwise.
+3. A single PR may span multiple services — post one comment per service unless
+   the user says otherwise.
 
 ## Engaging the user
 
 These are explicit interaction points; don't skip them:
 
 - After fetching the ticket → "Anything else I should know?"
-- Before creating folders / worktrees / branches → confirm the derived slug.
 - Before starting implementation → confirm the plan.
 - Before any commit, push, or PR → ask explicitly.
-- Whenever inferring services or repos → present the guess and ask, don't assume silently.
+- Whenever inferring services or repos → present the guess and ask, don't assume
+  silently.
+
+## Relationship to `rpc-handoff-jira-task`
+
+- **`rpc-handoff-jira-task`** = ensure the working assets exist (folder, tmux
+  session, Claude session, branch, worktrees, VS Code workspace) and stage a
+  waiting session. Bootstrap only.
+- **`rpc-do-jira-task`** (this skill) = implement the task inside that
+  already-bootstrapped environment.
