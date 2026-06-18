@@ -192,6 +192,6 @@ bindkey -M vicmd '\es' sesh-sessions
 bindkey -M viins '\es' sesh-sessions
 
 ## Auto-launch sesh picker on new terminal
-if [[ -z "$TMUX" ]] && command -v sesh &>/dev/null; then
+if [[ -z "$TMUX" ]] && command -v sesh &>/dev/null && [[ $- == *i* ]] && [[ -t 0 ]]; then
   sesh-sessions
 fi
