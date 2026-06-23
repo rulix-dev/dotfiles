@@ -202,9 +202,11 @@ Tell the user the handoff is complete: which assets were created vs reused, the
 workspace file path, the tmux session name, and that the Claude session
 `<TASK_SLUG>` is up and waiting in tmux for their instructions.
 
-## Relationship to `rpc-do-jira-task`
+## Relationship to the other rpc-* skills
 
 - **`rpc-handoff-jira-task`** (this skill) = ensure the assets exist and stage a
   waiting session. Bootstrap only.
 - **`rpc-do-jira-task`** = implement the task (explore → plan → TDD →
   implement → commit/PR) inside that already-bootstrapped environment.
+- **`rpc-wrapup-jira-task`** = once PR(s) are merged, run this to close the loop:
+  consistency review, JIRA transition, and worktree/branch cleanup.

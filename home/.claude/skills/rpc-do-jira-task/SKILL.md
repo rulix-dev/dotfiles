@@ -124,10 +124,19 @@ These are explicit interaction points; don't skip them:
 - Whenever inferring services or repos → present the guess and ask, don't assume
   silently.
 
-## Relationship to `rpc-handoff-jira-task`
+## When the work is done
+
+Once the PR(s) are merged, run **`/rpc-wrapup-jira-task <JIRA-ID>`** to:
+- Verify consistency between JIRA description, PR descriptions, and the actual diff.
+- Transition the JIRA ticket to Done / In-Production.
+- Clean up worktrees and local branches.
+
+## Relationship to the other rpc-* skills
 
 - **`rpc-handoff-jira-task`** = ensure the working assets exist (folder, tmux
   session, Claude session, branch, worktrees, VS Code workspace) and stage a
   waiting session. Bootstrap only.
 - **`rpc-do-jira-task`** (this skill) = implement the task inside that
   already-bootstrapped environment.
+- **`rpc-wrapup-jira-task`** = once PR(s) are merged, run this to close the task:
+  consistency review, JIRA transition, and worktree/branch cleanup.
