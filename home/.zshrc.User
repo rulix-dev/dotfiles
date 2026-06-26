@@ -1,4 +1,16 @@
 
+# --- Stable SSH agent socket -------------------------------------------------
+# Long-lived processes (tmux server, Claude, editors) capture $SSH_AUTH_SOCK at
+# launch. When the real agent socket changes across SSH logins, that captured
+# path goes stale and git signing/auth breaks ("could not connect to agent").
+# Keep a fixed symlink that each fresh login refreshes, and always point this
+# shell at it so the path never goes stale.
+if [[ -S "$SSH_AUTH_SOCK" && "$SSH_AUTH_SOCK" != "$HOME/.ssh/agent.sock" ]]; then
+  ln -sf "$SSH_AUTH_SOCK" "$HOME/.ssh/agent.sock"
+fi
+[[ -S "$HOME/.ssh/agent.sock" ]] && export SSH_AUTH_SOCK="$HOME/.ssh/agent.sock"
+# -----------------------------------------------------------------------------
+
 ## Unsetting context to make sure every time the context is needed (avoid accidental commands)
 kubectl config unset current-context
 
