@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""Inspect and manage Claude Code sessions.
+
+Usage:
+  claude_sessions list [directory] [-R|--recursive] [--max-depth N] [-G|--global]
+  claude_sessions delete --id <id>[,<id>...] [--id <id> ...]
+  claude_sessions delete --path <path> [-R|--recursive] [--max-depth N] [-f|--force]
+
+list:
+  If no directory is given, uses the current working directory.
+  With -R/--recursive, also looks in every subdirectory (optionally
+  bounded by --max-depth). With -G/--global, all other options are
+  ignored and every session under $HOME/.claude/projects is listed.
+
+delete:
+  --id can be passed multiple times and/or as a comma-separated list.
+  Sessions deleted by --id are removed without confirmation.
+  --path searches for sessions under that path (same -R/--max-depth
+  semantics as list), shows the affected sessions and asks for
+  confirmation unless -f/--force is given.
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import sys
+from datetime import datetime
+
+MONTHS = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
+
+def encode_project_dir(abs_path):
+    return re.sub(r"[^A-Za-z0-9]", "-", abs_path)
+
+
+def human_size(num_bytes):
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    for unit in ("KB", "MB", "GB"):
+        num_bytes /= 1024
+        if num_bytes < 1024 or unit == "GB":
+            if unit == "KB":
+                return f"{num_bytes:.0f} {unit}"
+            return f"{num_bytes:.1f} {unit}"
+    return f"{num_bytes:.1f} GB"
+
+
+def human_mtime(ts):
+    dt = datetime.fromtimestamp(ts)
+    return f"{dt.day:02d} {MONTHS[dt.month - 1]} {dt.hour:02d}:{dt.minute:02d}"
+
+
+def session_info(path):
+    """Returns (name, cwd) read from a session's .jsonl file, walking it once."""
+    custom = None
+    ai = None
+    cwd = None
+    try:
+        with open(path, "r", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                t = obj.get("type")
+                if t == "custom-title":
+                    custom = obj.get("customTitle")
+                elif t == "ai-title":
+                    ai = obj.get("aiTitle")
+                if cwd is None and "cwd" in obj:
+                    cwd = obj["cwd"]
+    except OSError:
+        pass
+    return custom or ai or "(unnamed)", cwd
+
+
+def collect_sessions(project_dir, fallback_dir):
+    rows = []
+    for entry in os.listdir(project_dir):
+        if not entry.endswith(".jsonl"):
+            continue
+        path = os.path.join(project_dir, entry)
+        if not os.path.isfile(path):
+            continue
+        session_id = entry[: -len(".jsonl")]
+        stat = os.stat(path)
+        name, cwd = session_info(path)
+        rows.append(
+            {
+                "id": session_id,
+                "name": name,
+                "size": human_size(stat.st_size),
+                "mtime": human_mtime(stat.st_mtime),
+                "mtime_raw": stat.st_mtime,
+                "dir": cwd or fallback_dir,
+                "file": path,
+            }
+        )
+    return rows
+
+
+def find_project_dir(directory):
+    encoded = encode_project_dir(directory)
+    project_dir = os.path.join(os.path.expanduser("~"), ".claude", "projects", encoded)
+    return project_dir if os.path.isdir(project_dir) else None
+
+
+def projects_root():
+    return os.path.join(os.path.expanduser("~"), ".claude", "projects")
+
+
+def collect_sessions_global():
+    rows = []
+    root = projects_root()
+    if not os.path.isdir(root):
+        return rows
+    for entry in os.listdir(root):
+        project_dir = os.path.join(root, entry)
+        if os.path.isdir(project_dir):
+            rows.extend(collect_sessions(project_dir, entry))
+    return rows
+
+
+def collect_sessions_recursive(root, max_depth=None):
+    rows = []
+    for current, dirnames, _ in os.walk(root):
+        rel = os.path.relpath(current, root)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+
+        if max_depth is not None and depth >= max_depth:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+
+        project_dir = find_project_dir(os.path.realpath(current))
+        if project_dir:
+            label = os.path.basename(root) or root if rel == "." else rel
+            rows.extend(collect_sessions(project_dir, label))
+    return rows
+
+
+def print_table(rows, show_dir=False):
+    headers = ["Full ID", "Name", "Size", "Last modified"]
+    keys = ["id", "name", "size", "mtime"]
+    if show_dir:
+        headers.append("Directory")
+        keys.append("dir")
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, key in enumerate(keys):
+            widths[i] = max(widths[i], len(row[key]))
+
+    def line(left, mid, right, fill="─"):
+        return left + mid.join(fill * (w + 2) for w in widths) + right
+
+    def row_line(cells):
+        return "│ " + " │ ".join(c.ljust(w) for c, w in zip(cells, widths)) + " │"
+
+    print(line("┌", "┬", "┐"))
+    print(row_line(headers))
+    print(line("├", "┼", "┤"))
+    for i, row in enumerate(rows):
+        print(row_line([row[k] for k in keys]))
+        if i != len(rows) - 1:
+            print(line("├", "┼", "┤"))
+    print(line("└", "┴", "┘"))
+
+
+def find_session_file_by_id(session_id):
+    root = projects_root()
+    if not os.path.isdir(root):
+        return None
+    for entry in os.listdir(root):
+        candidate = os.path.join(root, entry, f"{session_id}.jsonl")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def delete_session_file(path):
+    session_id = os.path.basename(path)[: -len(".jsonl")]
+    project_dir = os.path.dirname(path)
+    os.remove(path)
+    sidecar = os.path.join(project_dir, session_id)
+    if os.path.isdir(sidecar):
+        shutil.rmtree(sidecar)
+
+
+def resolve_dir_options(args):
+    if args.max_depth is not None and not args.recursive:
+        print("Error: --max-depth only has an effect together with -R/--recursive", file=sys.stderr)
+        sys.exit(1)
+    if args.max_depth is not None and args.max_depth < 0:
+        print("Error: --max-depth must be >= 0", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_list(args):
+    if args.global_:
+        rows = collect_sessions_global()
+        if not rows:
+            print("No sessions found in $HOME/.claude/projects")
+            return
+        rows.sort(key=lambda r: r["mtime_raw"], reverse=True)
+        print_table(rows, show_dir=True)
+        return
+
+    resolve_dir_options(args)
+
+    abs_path = os.path.realpath(os.path.expanduser(args.directory))
+
+    if not os.path.isdir(abs_path):
+        print(f"Error: '{args.directory}' is not a valid directory", file=sys.stderr)
+        sys.exit(1)
+
+    if args.recursive:
+        rows = collect_sessions_recursive(abs_path, max_depth=args.max_depth)
+    else:
+        project_dir = find_project_dir(abs_path)
+        if not project_dir:
+            print(f"No Claude Code sessions found for '{abs_path}'", file=sys.stderr)
+            sys.exit(1)
+        rows = collect_sessions(project_dir, os.path.basename(abs_path) or abs_path)
+
+    if not rows:
+        print(f"No sessions for '{abs_path}'" + (" (recursive search)" if args.recursive else ""))
+        return
+
+    rows.sort(key=lambda r: r["mtime_raw"], reverse=True)
+    print_table(rows, show_dir=args.recursive)
+
+
+def cmd_delete(args):
+    ids = []
+    for raw in args.id or []:
+        for piece in raw.split(","):
+            piece = piece.strip()
+            if piece and piece not in ids:
+                ids.append(piece)
+
+    if not ids and not args.path:
+        print("Error: you must specify --id or --path", file=sys.stderr)
+        sys.exit(1)
+
+    exit_code = 0
+
+    if ids:
+        for session_id in ids:
+            path = find_session_file_by_id(session_id)
+            if not path:
+                print(f"No session found with id '{session_id}'", file=sys.stderr)
+                exit_code = 1
+                continue
+            delete_session_file(path)
+            print(f"Deleted session {session_id}")
+
+    if args.path:
+        resolve_dir_options(args)
+
+        abs_path = os.path.realpath(os.path.expanduser(args.path))
+
+        if not os.path.isdir(abs_path):
+            print(f"Error: '{args.path}' is not a valid directory", file=sys.stderr)
+            sys.exit(1)
+
+        if args.recursive:
+            rows = collect_sessions_recursive(abs_path, max_depth=args.max_depth)
+        else:
+            project_dir = find_project_dir(abs_path)
+            rows = collect_sessions(project_dir, os.path.basename(abs_path) or abs_path) if project_dir else []
+
+        if not rows:
+            print(f"No sessions to delete in '{abs_path}'" + (" (recursive search)" if args.recursive else ""))
+            sys.exit(exit_code)
+
+        rows.sort(key=lambda r: r["mtime_raw"], reverse=True)
+        print(f"About to delete {len(rows)} session(s):")
+        print_table(rows, show_dir=True)
+
+        if not args.force:
+            answer = input("Confirm deletion? [y/N] ").strip().lower()
+            if answer not in ("y", "yes"):
+                print("Cancelled.")
+                sys.exit(exit_code)
+
+        for row in rows:
+            delete_session_file(row["file"])
+            print(f"Deleted session {row['id']}")
+
+    sys.exit(exit_code)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Inspect and manage Claude Code sessions")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = subparsers.add_parser("list", help="List the sessions of a directory")
+    list_parser.add_argument("directory", nargs="?", default=os.getcwd(), help="Directory to inspect (defaults to the current one)")
+    list_parser.add_argument("-R", "--recursive", action="store_true", help="Also look in every subdirectory")
+    list_parser.add_argument("--max-depth", type=int, default=None, help="Maximum recursion depth (only with -R)")
+    list_parser.add_argument("-G", "--global", dest="global_", action="store_true", help="List every session under $HOME/.claude, ignoring all other options")
+    list_parser.set_defaults(func=cmd_list)
+
+    delete_parser = subparsers.add_parser("delete", help="Delete sessions by id or by path")
+    delete_parser.add_argument("--id", action="append", default=[], help="Session ID to delete (repeatable, or several comma-separated). Does not ask for confirmation.")
+    delete_parser.add_argument("--path", default=None, help="Directory to search for sessions to delete (asks for confirmation unless -f/--force)")
+    delete_parser.add_argument("-R", "--recursive", action="store_true", help="With --path, also look in every subdirectory")
+    delete_parser.add_argument("--max-depth", type=int, default=None, help="Maximum recursion depth (only with --path -R)")
+    delete_parser.add_argument("-f", "--force", action="store_true", help="With --path, do not ask for confirmation")
+    delete_parser.set_defaults(func=cmd_delete)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
