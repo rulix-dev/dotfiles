@@ -1,0 +1,197 @@
+connect-to-psql() {
+  local dc="$1"
+  local type="${2:-replica}"
+  
+  if [[ -z "$dc" ]]; then
+    echo "Usage: connect-to-psql <datacenter> [replica|primary]"
+    echo "Example: connect-to-psql us1.prod.dog replica"
+    echo "Example: connect-to-psql us1.prod.dog primary"
+    return 1
+  fi
+  
+  # Set defaults
+  local namespace="datadog"
+  local label_key="service"
+  local label_value="postgres-toolbox"
+  local port="5432"
+  local db_user="ddmasterprod"
+  local db_name="ciappprod"
+  
+  case "$dc" in
+    us1.prod.dog)
+      local vault_addr="https://vault.us1.prod.dog"
+      local cluster="patrat.us1.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="ci_app_db.us1.prod.dog"
+      else
+        local host="ci-app-db-replica-general.postgres.us1.prod.dog"
+      fi
+      port="5433"
+      ;;
+    us3.prod.dog)
+      local vault_addr="https://vault.us3.prod.dog"
+      local cluster="zekrom.us3.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="proxy-ci-app-db.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      else
+        local host="proxy-ci-app-db-replica-general.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      fi
+      ;;
+    us5.prod.dog)
+      local vault_addr="https://vault.us5.prod.dog"
+      local cluster="hypno.us5.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="ci-app-db.postgres.us5.prod.dog"
+      else
+        local host="ci-app-db-replica-general.postgres.us5.prod.dog"
+      fi
+      ;;
+    eu1.prod.dog)
+      local vault_addr="https://vault.eu1.prod.dog"
+      local cluster="spirou.eu1.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="ci-app-db.postgres.eu1.prod.dog"
+      else
+        local host="ci-app-db-replica-general.postgres.eu1.prod.dog"
+      fi
+      ;;
+    ap1.prod.dog)
+      local vault_addr="https://vault.ap1.prod.dog"
+      local cluster="nidorino.ap1.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="proxy-ci-app-db.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      else
+        local host="proxy-ci-app-db-replica-main.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      fi
+      ;;
+    ap2.prod.dog)
+      local vault_addr="https://vault.ap2.prod.dog"
+      local cluster="espathra.ap2.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="proxy-ci-app-db.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      else
+        local host="proxy-ci-app-db-replica-main.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      fi
+      namespace="postgres-ci-app-db"
+      label_key="app"
+      ;;
+    us1.staging.dog)
+      local vault_addr="https://vault.us1.staging.dog"
+      local cluster="gizmo.us1.staging.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="ci_app_db.us1.staging.dog"
+      else
+        local host="ci-app-db-replica-general.postgres.us1.staging.dog"
+      fi
+      port="5433"
+      db_user="ddmasterstaging"
+      db_name="ciappstaging"
+      ;;
+    prtest00.staging.dog)
+      local vault_addr="https://vault.prtest00.staging.dog"
+      local cluster="miltank.prtest00.staging.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="proxy-ci-app-db.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      else
+        local host="proxy-ci-app-db-replica-main.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      fi
+      namespace="postgres-ci-app-db"
+      label_key="app"
+      ;;
+    prtest07.prod.dog)
+      local vault_addr="https://vault.prtest07.prod.dog"
+      local cluster="scraggy.prtest07.prod.dog"
+      if [[ "$type" == "primary" ]]; then
+        local host="proxy-ci-app-db.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      else
+        local host="proxy-ci-app-db-replica-main.postgres-ci-app-db.all-clusters.local-dc.fabric.dog"
+      fi
+      namespace="postgres-ci-app-db"
+      label_key="app"
+      ;;
+    *)
+      echo "Error: Unknown datacenter '$dc'"
+      echo "Supported datacenters: us1.prod.dog, us3.prod.dog, us5.prod.dog, eu1.prod.dog, ap1.prod.dog, ap2.prod.dog, us1.staging.dog, prtest00.staging.dog, prtest07.prod.dog"
+      return 1
+      ;;
+  esac
+  
+  VAULT_ADDR=$vault_addr vault token lookup > /dev/null 2>&1 || VAULT_ADDR=$vault_addr vault login -method=oidc -no-print >/dev/null 2>&1
+  ddtool clusters context $cluster
+  kubectl exec -n $namespace -it $(
+    kubectl get pod -n $namespace -l ${label_key}="${label_value}" -o=jsonpath="{.items[0].metadata.name}"
+  ) -- env PGPASSWORD=$(VAULT_ADDR=$vault_addr vault kv get -field=password kv/k8s/ci-app/shared/ci_app_db) psql -h $host -p $port -U $db_user -d $db_name
+}
+
+# Helper function that shows warning and connects to replica
+connect-to-psql-with-warning() {
+  local dc="$1"
+  echo "⚠️⚠️⚠️ WARNING ⚠️⚠️⚠️: This command now connects to REPLICA instead of PRIMARY. If you need primary, add '-primary' to the end of the command, ie psql-us1-primary"
+  connect-to-psql "$dc"
+}
+
+# Aliases for replicas (with warning that behavior changed from primary to replica)
+alias psql-us1='connect-to-psql-with-warning us1.prod.dog'
+alias psql-us3='connect-to-psql-with-warning us3.prod.dog'
+alias psql-us5='connect-to-psql-with-warning us5.prod.dog'
+alias psql-eu1='connect-to-psql-with-warning eu1.prod.dog'
+alias psql-ap1='connect-to-psql-with-warning ap1.prod.dog'
+alias psql-ap2='connect-to-psql-with-warning ap2.prod.dog'
+alias psql-staging='connect-to-psql-with-warning us1.staging.dog'
+alias psql-prtest00='connect-to-psql-with-warning prtest00.staging.dog'
+alias psql-prtest07='connect-to-psql-with-warning prtest07.prod.dog'
+
+# Aliases for replicas (explicit - these used to be the aliases before)
+alias psql-us1-replica='connect-to-psql us1.prod.dog'
+alias psql-us3-replica='connect-to-psql us3.prod.dog'
+alias psql-us5-replica='connect-to-psql us5.prod.dog'
+alias psql-eu1-replica='connect-to-psql eu1.prod.dog'
+alias psql-ap1-replica='connect-to-psql ap1.prod.dog'
+alias psql-ap2-replica='connect-to-psql ap2.prod.dog'
+alias psql-staging-replica='connect-to-psql us1.staging.dog'
+alias psql-prtest00-replica='connect-to-psql prtest00.staging.dog'
+alias psql-prtest07-replica='connect-to-psql prtest07.prod.dog'
+
+# Aliases for primary
+alias psql-us1-primary='connect-to-psql us1.prod.dog primary'
+alias psql-us3-primary='connect-to-psql us3.prod.dog primary'
+alias psql-us5-primary='connect-to-psql us5.prod.dog primary'
+alias psql-eu1-primary='connect-to-psql eu1.prod.dog primary'
+alias psql-ap1-primary='connect-to-psql ap1.prod.dog primary'
+alias psql-ap2-primary='connect-to-psql ap2.prod.dog primary'
+alias psql-staging-primary='connect-to-psql us1.staging.dog primary'
+alias psql-prtest00-primary='connect-to-psql prtest00.staging.dog primary'
+alias psql-prtest07-primary='connect-to-psql prtest07.prod.dog primary'
+
+# Aliases to connect to the postgres server (Linux machine) via postgres-toolbox pod
+# US1 prod
+alias psql-server-us1-primary='ddtool clusters context patrat.us1.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l ="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-us1-replica='ddtool clusters context patrat.us1.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# US3 prod
+alias psql-server-us3-primary='ddtool clusters context zekrom.us3.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-us3-replica='ddtool clusters context zekrom.us3.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# US5 prod
+alias psql-server-us5-primary='ddtool clusters context hypno.us5.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-us5-replica='ddtool clusters context hypno.us5.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# EU1 prod
+alias psql-server-eu1-primary='ddtool clusters context spirou.eu1.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-eu1-replica='ddtool clusters context spirou.eu1.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# AP1 prod
+alias psql-server-ap1-primary='ddtool clusters context nidorino.ap1.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-ap1-replica='ddtool clusters context nidorino.ap1.prod.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# AP2 prod
+alias psql-server-ap2-primary='ddtool clusters context espathra.ap2.prod.dog && kubectl exec -n postgres-ci-app-db -it $(kubectl get pod -n postgres-ci-app-db -l app="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-ap2-replica='ddtool clusters context espathra.ap2.prod.dog && kubectl exec -n postgres-ci-app-db -it $(kubectl get pod -n postgres-ci-app-db -l app="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# US1 staging
+alias psql-server-staging-primary='ddtool clusters context gizmo.us1.staging.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+alias psql-server-staging-replica='ddtool clusters context gizmo.us1.staging.dog && kubectl exec -n datadog -it $(kubectl get pod -n datadog -l service="postgres-toolbox" -o=jsonpath="{.items[0].metadata.name}") -- bash'
+
+# Local DB
+alias psql-docker="docker exec -it \$(docker ps | grep postgres | awk '{print \$1}' | head -n 1) psql -U dog -d dogdata"
+

@@ -1,0 +1,57 @@
+
+get_es_toolbox_pod() {
+  local namespace=$1
+  kubectl get pod -n "$namespace" -l app="elasticsearch-toolbox" -o=jsonpath="{.items[0].metadata.name}"
+}
+
+alias es-dora-staging='ddtool clusters context stripe.us1.staging.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-us1='ddtool clusters context patrat.us1.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-eu1='ddtool clusters context logs10.eu1.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-us3='ddtool clusters context logs12.us3.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-us5='ddtool clusters context dragonair.us5.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-ap1='ddtool clusters context nidorino.ap1.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-ap2='ddtool clusters context espathra.ap2.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+alias es-dora-uk1='ddtool clusters context buneary.uk1.prod.dog && \
+kubectl exec -n elasticsearch-dora -it $(get_es_toolbox_pod "elasticsearch-dora") -- bash'
+
+
+
+# k8s port forwarding aliases
+alias portfw-esdora-stg='ddtool clusters context stripe.us1.staging.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9200'
+
+alias portfw-esdora-us1='ddtool clusters context patrat.us1.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9201:9200'
+
+alias portfw-esdora-eu1='ddtool clusters context logs10.eu1.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9202:9200'
+
+alias portfw-esdora-us3='ddtool clusters context logs12.us3.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9203:9200'
+
+alias portfw-esdora-us5='ddtool clusters context dragonair.us5.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9205:9200'
+
+alias portfw-esdora-ap1='ddtool clusters context nidorino.ap1.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9206:9200'
+
+alias portfw-esdora-ap2='ddtool clusters context espathra.ap2.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9207:9200'
+
+alias portfw-esdora-uk1='ddtool clusters context buneary.uk1.prod.dog && \
+kubectl port-forward -n elasticsearch-dora service/elasticsearch-dora-client 9208:9200'
+

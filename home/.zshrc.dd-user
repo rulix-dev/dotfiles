@@ -1,0 +1,9 @@
+
+export DATADOG_ROOT=$HOME/dd
+export PATH=$DATADOG_ROOT/devtools/bin:$PATH
+
+alias ddsource='cd $DATADOG_ROOT/dd-source'
+alias ddgo='cd $DATADOG_ROOT/dd-go'
+alias webui='cd $DATADOG_ROOT/web-ui'
+alias dogweb='cd $DATADOG_ROOT/dogweb'
+alias ddanalytics='cd $DATADOG_ROOT/dd-analytics'
