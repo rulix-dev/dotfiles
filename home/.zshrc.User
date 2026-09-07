@@ -207,3 +207,5 @@ bindkey -M viins '\es' sesh-sessions
 if [[ -z "$TMUX" ]] && command -v sesh &>/dev/null && [[ $- == *i* ]] && [[ -t 0 ]]; then
   sesh-sessions
 fi
+
+export PATH=$HOME/rulix-dev/dotfiles/target/home/.local/bin:$PATH
