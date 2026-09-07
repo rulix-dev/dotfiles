@@ -10,4 +10,4 @@
 [include]
         path = ~/.gitconfig.User
 [include]
-        path = ~/.gitconfig.Work
+        path = ~/.config/datadog/git/config
