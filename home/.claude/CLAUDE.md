@@ -6,6 +6,7 @@
 - Commit messages must be a single line: `TICKET-ID: Short description` (e.g. `SDCD-1234: Fix go fmt`). No brackets around the ticket ID, no multi-line body, no file names or implementation details.
 - Branch name should be raul.perezclavero/<short-desc>:
     - The <short-desc> part should contain the jira ticket ID we are working on. If no context about any jira ticket, simply say NO-TICKET-... and the rest of the description a very very brief desc of the changes done.
+- Generally, avoid committing or pushing changes with explicit approval from user
 
 ## Diffs
 
