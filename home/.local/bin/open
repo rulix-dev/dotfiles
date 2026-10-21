@@ -1,0 +1,19 @@
+#!/bin/sh
+# Shim for macOS `open`: URLs opened by ddtool (e.g. the Claude Code apiKeyHelper
+# OIDC login) always go to the main Chrome profile instead of the last-used one.
+# Everything else is passed through to the system `open` untouched.
+
+CHROME_PROFILE="Default" # DDOG (raul.perezclavero@datadoghq.com)
+
+if [ "$#" -eq 1 ]; then
+    case "$1" in
+    http://* | https://*)
+        parent="$(ps -o comm= -p "$PPID" 2>/dev/null)"
+        if [ "${parent##*/}" = "ddtool" ]; then
+            exec /usr/bin/open -na "Google Chrome" --args --profile-directory="$CHROME_PROFILE" "$1"
+        fi
+        ;;
+    esac
+fi
+
+exec /usr/bin/open "$@"
