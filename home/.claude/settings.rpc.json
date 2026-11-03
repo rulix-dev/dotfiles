@@ -154,39 +154,4 @@
     "code-simplifier@claude-plugins-official": true
   },
   "effortLevel": "high",
-  "mcpServers": {
-    "druids-mcp": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "-r",
-        "./.pnp.cjs",
-        "./packages/apps/druids/private/toolkit/mcp"
-      ]
-    },
-    "figma-mcp": {
-      "url": "https://mcp.figma.com/mcp",
-      "type": "http"
-    },
-    "atlassian": {
-      "type": "http",
-      "url": "https://mcp.atlassian.com/v1/mcp"
-    },
-    "datadog": {
-      "type": "http",
-      "url": "https://mcp.datadoghq.com/v1/mcp?toolsets=core,workflows,widgets,dashboards,search"
-    },
-    "datadog-eu": {
-      "type": "http",
-      "url": "https://mcp.datadoghq.eu/v1/mcp?toolsets=core,workflows,widgets,dashboards,search"
-    },
-    "chrome-devtools": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "chrome-devtools-mcp@latest",
-        "--isolated=true"
-      ]
-    }
-  }
 }
