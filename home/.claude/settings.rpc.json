@@ -174,7 +174,7 @@
     },
     "datadog": {
       "type": "http",
-      "url": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp?toolsets=core,workflows,widgets,dashboards,search"
+      "url": "https://mcp.datadoghq.com/api/v1/mcp-server/mcp?toolsets=core,workflows,widgets,dashboards,search"
     },
     "chrome-devtools": {
       "type": "stdio",
