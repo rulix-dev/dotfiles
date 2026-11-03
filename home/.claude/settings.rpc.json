@@ -153,5 +153,5 @@
     "pr-review-toolkit@claude-plugins-official": true,
     "code-simplifier@claude-plugins-official": true
   },
-  "effortLevel": "high",
+  "effortLevel": "high"
 }
