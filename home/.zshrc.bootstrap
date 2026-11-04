@@ -168,14 +168,15 @@ __rulix_dev_claude_mcp_sync() {
 #     claude-marketplace package, which bridges the Claude plugins enabled in
 #     ~/.claude/settings.json (skills, commands, agents) into pi
 #   - ~/.pi/agent/AGENTS.md (stowed): symlink to ~/.claude/CLAUDE.md
-#   - ~/.config/mcp/mcp.json (stowed): same MCP servers as Claude (datadog-us/eu
-#     with the same toolsets as __rulix_dev_claude_mcp_sync - keep both lists in
-#     sync - google-workspace, chrome-devtools), the golden "datadog" disabled,
-#     and approveTools (ask before write tools). pi-setup rewrites the golden
-#     entries in ~/.pi/agent/mcp.json on every run; this lower-precedence file
-#     is merged field by field by pi-mcp-adapter, and pi-setup never touches
-#     it. Edit it here, not with pi's "/mcp setup" (its global target is this
-#     file, overwritten on install).
+#   - ~/.pi/agent/mcp-adapter.rpc.json: merged into ~/.pi/agent/mcp-adapter.json
+#     (pi-mcp-adapter 3.x config; pi-setup merges the golden servers into it
+#     additively and never overwrites user entries): same MCP servers as Claude
+#     (datadog-us/eu with the same toolsets as __rulix_dev_claude_mcp_sync -
+#     keep both lists in sync - google-workspace, chrome-devtools), the golden
+#     "datadog" disabled, and a global approveTools: "destructive" (ask before
+#     any tool the server doesn't mark read-only).
+#     ~/.pi/agent/mcp.json is pi's built-in MCP config: don't use it, or both
+#     hosts load the same servers.
 __rulix_dev_pi_setup() {
   if ! command -v pi-setup &>/dev/null; then
     if ! command -v dogbrew &>/dev/null; then
@@ -193,8 +194,9 @@ __rulix_dev_pi_setup() {
   pi-setup --skip-auth || echo "WARN: pi-setup failed, re-run it manually" >&2
 
   __rulix_dev_merge_json "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/settings.rpc.json"
+  __rulix_dev_merge_json "$HOME/.pi/agent/mcp-adapter.json" "$HOME/.pi/agent/mcp-adapter.rpc.json"
 
-  echo "pi: check with 'pi-setup doctor', then authenticate MCP servers inside pi with /mcp"
+  echo "pi: check with 'pi-setup doctor', then authenticate MCP servers inside pi with /mcp-auth <server>"
 }
 
 __rulix_dev_zsh_setup
