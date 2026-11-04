@@ -25,7 +25,8 @@ __rulix_dev_stow_dotfiles() {
   done
 
   # Remove existing files/symlinks in HOME that would conflict with stow
-  find "$STOW_ROOT" -type f | while read -r file; do
+  # (the package itself may contain symlinks, e.g. .pi/agent/AGENTS.md)
+  find "$STOW_ROOT" \( -type f -o -type l \) | while read -r file; do
     relative="${file#"$STOW_ROOT"/}"
     target="$HOME/$relative"
     if [[ -e "$target" || -L "$target" ]]; then
@@ -88,8 +89,36 @@ __rulix_dev_zsh_setup() {
     # Merge Claude Settings
     __rulix_dev_merge_claude_settings
 
+    # Pi coding agent, configured like Claude
+    __rulix_dev_pi_setup
+
     # Create file to avoid setup next time
     touch "${HOME}/.zshrc.setup"
+}
+
+# Deep-merge the JSON overlay $2 into $1 (overlay wins). Top-level arrays are
+# unioned instead of replaced, keeping order, so list-like settings (e.g. pi
+# "packages"/"skills") keep the entries other tools added.
+__rulix_dev_merge_json() {
+  local base="$1"
+  local overlay="$2"
+
+  [[ -f "$overlay" ]] || return 0
+
+  if [[ ! -f "$base" ]]; then
+    cp "$overlay" "$base"
+    return 0
+  fi
+
+  local merged
+  merged="$(jq -s '
+    def union($a; $b): reduce ($a + $b)[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
+    .[0] as $base | .[1] as $overlay
+    | reduce ($overlay | to_entries[] | select(.value | type == "array")) as $e
+        ($base * $overlay; .[$e.key] = union($base[$e.key] // []; $e.value))
+  ' "$base" "$overlay")" || return 1
+  # printf, not echo: zsh's echo would expand backslash escapes inside the JSON
+  printf '%s\n' "$merged" > "$base"
 }
 
 __rulix_dev_merge_claude_settings() {
@@ -100,21 +129,72 @@ __rulix_dev_merge_claude_settings() {
     return 0
   fi
 
-  if [[ -f "$base" && -f "$overlay" ]]; then
-    local merged
-    merged="$(jq -s '.[0] * .[1]' "$base" "$overlay")" || return 1
-    echo "$merged" > "$base"
-  elif [[ ! -f "$base" && -f "$overlay" ]]; then
-    cp "$overlay" "$base"
+  __rulix_dev_merge_json "$base" "$overlay" || return 1
+
+  __rulix_dev_claude_mcp_sync
+}
+
+# Claude Code reads user-scope MCP servers from ~/.claude.json (not from
+# settings.json). Only the servers below are managed here: each one is removed
+# and re-added (re-running means re-authenticating them); others are left alone.
+__rulix_dev_claude_mcp_sync() {
+  command -v claude &>/dev/null || return 0
+
+  # All GA toolsets plus the read-only previews (apm, investigator,
+  # live-debugger); remote-actions left out on purpose.
+  # https://docs.datadoghq.com/bits_ai/mcp_server/setup/
+  local dd_toolsets="core,alerting,apm,assistant,audit-trail,cases,code-exec,cost,dashboards,data-observability,dbm,ddsql,derived-metrics,documentation,error-tracking,feature-flags,governance,investigator,kubernetes,live-debugger,llmobs,logs-configuration,networks,notebooks,observability-pipelines,onboarding,product-analytics,profiling,reference-tables,rum,security,sheets,software-delivery,synthetics,widgets,workflows"
+
+  # name / JSON pairs, in the order they should appear. Slack and the browser
+  # (Playwright) come from plugins enabled in settings.rpc.json instead.
+  local -a servers=(
+    atlassian        '{"type":"http","url":"https://mcp.atlassian.com/v1/mcp/authv2"}'
+    datadog-us       '{"type":"http","url":"https://mcp.datadoghq.com/v1/mcp?toolsets='$dd_toolsets'"}'
+    datadog-eu       '{"type":"http","url":"https://mcp.datadoghq.eu/v1/mcp?toolsets='$dd_toolsets'"}'
+    google-workspace '{"type":"http","url":"https://google-workspace-mcp-server-834963730936.us-central1.run.app/mcp"}'
+  )
+
+  local name json
+  for name json in "${servers[@]}"; do
+    claude mcp remove --scope user "$name" &>/dev/null
+    claude mcp add-json --scope user "$name" "$json" >/dev/null || echo "WARN: could not add MCP server $name" >&2
+  done
+}
+
+# Pi (https://datadoghq.atlassian.net/wiki/spaces/AIDEVX/pages/6970966751/Pi):
+# install the Datadog golden config with pi-setup, then layer our settings on
+# top so pi mirrors Claude:
+#   - ~/.pi/agent/settings.rpc.json: ~/.claude/skills as a skills source, and the
+#     claude-marketplace package, which bridges the Claude plugins enabled in
+#     ~/.claude/settings.json (skills, commands, agents) into pi
+#   - ~/.pi/agent/AGENTS.md (stowed): symlink to ~/.claude/CLAUDE.md
+#   - ~/.config/mcp/mcp.json (stowed): same MCP servers as Claude (datadog-us/eu
+#     with the same toolsets as __rulix_dev_claude_mcp_sync - keep both lists in
+#     sync - google-workspace, chrome-devtools), the golden "datadog" disabled,
+#     and approveTools (ask before write tools). pi-setup rewrites the golden
+#     entries in ~/.pi/agent/mcp.json on every run; this lower-precedence file
+#     is merged field by field by pi-mcp-adapter, and pi-setup never touches
+#     it. Edit it here, not with pi's "/mcp setup" (its global target is this
+#     file, overwritten on install).
+__rulix_dev_pi_setup() {
+  if ! command -v pi-setup &>/dev/null; then
+    if ! command -v dogbrew &>/dev/null; then
+      echo "WARN: dogbrew not found, skipping pi setup" >&2
+      return 0
+    fi
+    dogbrew install pi-setup || return 1
+    rehash
   fi
 
-  claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp
-  claude mcp add --transport http --scope user datadog-us "https://mcp.datadoghq.com/v1/mcp?toolsets=core,workflows,widgets,dashboards,search,software-delivery"
-  claude mcp add --transport http --scope user datadog-eu "https://mcp.datadoghq.eu/v1/mcp?toolsets=core,workflows,widgets,dashboards,search,software-delivery"
-  claude mcp add --transport stdio --scope user chrome-devtools -- npx chrome-devtools-mcp@latest --isolated=true
-  claude mcp add --transport http --scope user google-workspace https://google-workspace-mcp-server-834963730936.us-central1.run.app/mcp 
-  claude mcp add --transport http --scope user slack https://mcp.slack.com/mcp --client-id 1601185624273.8899143856786 --callback-port 3118 || true
+  # --skip-auth keeps the bootstrap non-interactive (datadog.team comes from
+  # ~/.gitconfig); run `pi-setup` again later if `pi-setup doctor` reports a
+  # missing ddtool login. Heads-up: pi-setup hard-resets
+  # ~/dd/datadog-pi-packages on every run.
+  pi-setup --skip-auth || echo "WARN: pi-setup failed, re-run it manually" >&2
 
+  __rulix_dev_merge_json "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/settings.rpc.json"
+
+  echo "pi: check with 'pi-setup doctor', then authenticate MCP servers inside pi with /mcp"
 }
 
 __rulix_dev_zsh_setup

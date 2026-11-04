@@ -1,0 +1,38 @@
+{
+  "mcpServers": {
+    "atlassian": {
+      "directTools": true,
+      "approveTools": ["*create*", "*edit*", "*update*", "*transition*", "*add*"]
+    },
+    "datadog": {
+      "disabled": true
+    },
+    "datadog-us": {
+      "type": "http",
+      "url": "https://mcp.datadoghq.com/v1/mcp?toolsets=core,alerting,apm,assistant,audit-trail,cases,code-exec,cost,dashboards,data-observability,dbm,ddsql,derived-metrics,documentation,error-tracking,feature-flags,governance,investigator,kubernetes,live-debugger,llmobs,logs-configuration,networks,notebooks,observability-pipelines,onboarding,product-analytics,profiling,reference-tables,rum,security,sheets,software-delivery,synthetics,widgets,workflows",
+      "directTools": true,
+      "approveTools": ["*create*", "*delete*", "*edit*", "*update*", "*upsert*", "*publish*", "*execute*", "*cancel*", "*retry*", "*submit*"]
+    },
+    "datadog-eu": {
+      "type": "http",
+      "url": "https://mcp.datadoghq.eu/v1/mcp?toolsets=core,alerting,apm,assistant,audit-trail,cases,code-exec,cost,dashboards,data-observability,dbm,ddsql,derived-metrics,documentation,error-tracking,feature-flags,governance,investigator,kubernetes,live-debugger,llmobs,logs-configuration,networks,notebooks,observability-pipelines,onboarding,product-analytics,profiling,reference-tables,rum,security,sheets,software-delivery,synthetics,widgets,workflows",
+      "directTools": true,
+      "approveTools": ["*create*", "*delete*", "*edit*", "*update*", "*upsert*", "*publish*", "*execute*", "*cancel*", "*retry*", "*submit*"]
+    },
+    "slack": {
+      "directTools": true,
+      "approveTools": ["*send*", "*schedule*", "*create*", "*update*", "*add*", "*upload*"]
+    },
+    "google-workspace": {
+      "type": "http",
+      "url": "https://google-workspace-mcp-server-834963730936.us-central1.run.app/mcp",
+      "auth": "oauth",
+      "approveTools": ["*create*", "*update*", "*delete*", "*send*", "*write*", "*modify*", "*share*", "*move*"]
+    },
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest", "--isolated=true"]
+    }
+  }
+}

@@ -11,3 +11,15 @@
         path = ~/.gitconfig.User
 [include]
         path = ~/.config/datadog/git/config
+# The Datadog-managed config above sets the work email for every repo:
+# default back to the personal one, and use the work identity only for the
+# Datadog (ddoghq) clones and their worktrees under ~/dd (a symlink in
+# workspaces, so match its target too).
+[user]
+        email = 212502137+rulix-dev@users.noreply.github.com
+[includeIf "gitdir:~/dd/"]
+        path = ~/.config/datadog/git/config
+[includeIf "gitdir:~/go/src/github.com/DataDog/"]
+        path = ~/.config/datadog/git/config
+[datadog]
+        team = team-softwaredelivery

@@ -1,0 +1,14 @@
+{
+  "defaultThinkingLevel": "high",
+  "skills": [
+    "~/.claude/skills"
+  ],
+  "packages": [
+    "../../dd/datadog-pi-packages/packages/claude-marketplace"
+  ],
+  "claudeMarketplace": {
+    "enabledPlugins": {
+      "workspaces@datadog-claude-plugins": true
+    }
+  }
+}
