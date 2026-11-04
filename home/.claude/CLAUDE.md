@@ -2,11 +2,12 @@
 
 ## Git commits and pull requests
 
-- Never include co-author information (e.g. `Co-Authored-By: Claude...`) in commit messages, PR titles, or PR descriptions.
-- Commit messages must be a single line: `TICKET-ID: Short description` (e.g. `SDCD-1234: Fix go fmt`). No brackets around the ticket ID, no multi-line body, no file names or implementation details.
+- Never include co-author information (e.g. `Co-Authored-By: Claude...`) or the `Environment: Datadog workspace` trailer in commit messages, PR titles, or PR descriptions.
+- Commit messages must be a single line in Conventional Commits style: `<type>(<service>): <short description>` (e.g. `fix(dora-intake): handle nil intake payload`). `<type>` is `feat`, `fix`, `hillclimb`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`, `build`… Omit `(<service>)` entirely when the change is not tied to a service (e.g. a library). The description says what that commit does. No ticket/incident reference, no multi-line body, no file names or implementation details.
+- PR titles follow the same format, with the reference right after the colon: `<type>(<service>): [<JIRA-KEY>] <description>` for JIRA work, `[INCIDENT-<n>]` for incident work. Pages and no-ticket work get no reference in the title (`<type>(<service>): <description>`); a page is referenced in the PR description instead.
 - Branch name should be raul.perezclavero/<short-desc>:
     - The <short-desc> part should contain the jira ticket ID we are working on. If no context about any jira ticket, simply say NO-TICKET-... and the rest of the description a very very brief desc of the changes done.
-- Generally, avoid committing or pushing changes with explicit approval from user
+- Generally, avoid committing or pushing changes without explicit approval from user
 
 ## Diffs
 
