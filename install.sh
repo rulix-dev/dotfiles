@@ -16,8 +16,31 @@ if [ "$FORCE" = 1 ]; then
     rm -f "$HOME/.zshrc.setup"
 fi
 
+TARGET="$SCRIPT_DIR/target/home"
+
+# target/home must be an exact copy of home/: rebuild it from scratch so files
+# removed from the repo don't linger there
+OLD_FILES="$(cd "$TARGET" 2>/dev/null && find . \( -type f -o -type l \) | sed 's#^\./##')"
+rm -rf "$TARGET"
 mkdir -p "$SCRIPT_DIR/target"
 cp -fr "$SCRIPT_DIR/home" "$SCRIPT_DIR/target"
+
+# ...and drop the $HOME symlinks (stowed earlier) to files that are gone, plus
+# the directories left empty
+printf '%s\n' "$OLD_FILES" | while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ -e "$TARGET/$rel" ] || [ -L "$TARGET/$rel" ]; then
+        continue
+    fi
+    link="$HOME/$rel"
+    [ -L "$link" ] || continue
+    case "$(readlink "$link")" in
+        */target/home/"$rel")
+            rm "$link"
+            rmdir -p "$(dirname "$link")" 2>/dev/null
+            ;;
+    esac
+done
 
 ln -sfn "$SCRIPT_DIR/target/home/.zshrc.bootstrap" "$HOME/.zshrc.bootstrap"
 
