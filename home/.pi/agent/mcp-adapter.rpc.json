@@ -4,7 +4,7 @@
   },
   "mcpServers": {
     "atlassian": {
-      "directTools": true
+      "directTools": "search"
     },
     "datadog": {
       "disabled": true
@@ -12,15 +12,15 @@
     "datadog-us": {
       "type": "http",
       "url": "https://mcp.datadoghq.com/v1/mcp?toolsets=core,alerting,apm,assistant,audit-trail,cases,code-exec,cost,dashboards,data-observability,dbm,ddsql,derived-metrics,documentation,error-tracking,feature-flags,governance,investigator,kubernetes,live-debugger,llmobs,logs-configuration,networks,notebooks,observability-pipelines,onboarding,product-analytics,profiling,reference-tables,rum,security,sheets,software-delivery,synthetics,widgets,workflows",
-      "directTools": true
+      "directTools": "search"
     },
     "datadog-eu": {
       "type": "http",
       "url": "https://mcp.datadoghq.eu/v1/mcp?toolsets=core,alerting,apm,assistant,audit-trail,cases,code-exec,cost,dashboards,data-observability,dbm,ddsql,derived-metrics,documentation,error-tracking,feature-flags,governance,investigator,kubernetes,live-debugger,llmobs,logs-configuration,networks,notebooks,observability-pipelines,onboarding,product-analytics,profiling,reference-tables,rum,security,sheets,software-delivery,synthetics,widgets,workflows",
-      "directTools": true
+      "directTools": "search"
     },
     "slack": {
-      "directTools": true
+      "directTools": "search"
     },
     "google-workspace": {
       "type": "http",
