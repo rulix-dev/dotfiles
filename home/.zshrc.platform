@@ -1,0 +1,94 @@
+# Platform layer for the dotfiles: the ONE place that knows about OS differences.
+#
+#   __rulix_dev_os            macos | debian | linux | unknown
+#   __rulix_dev_is_work       true on the Datadog work machine (dd tooling present)
+#   __rulix_dev_ensure_tools  install the CLI tools the dotfiles need, if missing
+#                             (Homebrew on macOS, apt on Debian/Ubuntu/Mint)
+#
+# Sourced first by .zshrc.bootstrap (before stow, straight from target/home), so
+# it must not depend on anything else in the repo.
+
+__rulix_dev_os() {
+  case "$OSTYPE" in
+    darwin*) echo macos ;;
+    linux*)  if [[ -r /etc/debian_version ]]; then echo debian; else echo linux; fi ;;
+    *)       echo unknown ;;
+  esac
+}
+
+# Datadog-only bits (.zshrc.dd*, pi-setup, work MCP servers) run only here.
+__rulix_dev_is_work() {
+  [[ -d "$HOME/dd" || -d "$HOME/.config/datadog" ]] || (( $+commands[dogbrew] ))
+}
+
+# Required tools: <command> <brew package> <apt package>.
+# Add a line here when the dotfiles start using a new tool.
+# (zoxide, starship, rust, fzf, sesh and gum are installed by __rulix_dev_zsh_setup
+# with their own installers, the same way on every OS.)
+typeset -ga __RULIX_DEV_TOOLS=(
+  # cmd     brew      apt
+  git       git       git
+  curl      curl      curl
+  jq        jq        jq
+  stow      stow      stow
+  tmux      tmux      tmux
+  gh        gh        gh
+  go        go        golang-go
+  fd        fd        fd-find
+  bat       bat       bat
+  eza       eza       eza
+  rg        ripgrep   ripgrep
+  btop      btop      btop
+  ranger    ranger    ranger
+)
+
+# Debian ships some tools under another binary name: <name we use> <debian name>.
+typeset -gA __RULIX_DEV_DEBIAN_RENAMES=(
+  fd  fdfind
+  bat batcat
+)
+
+# Make the Debian-renamed binaries available under their usual name.
+__rulix_dev_debian_renames() {
+  local want have
+  mkdir -p "$HOME/.local/bin"
+  for want have in "${(@kv)__RULIX_DEV_DEBIAN_RENAMES}"; do
+    if (( ! $+commands[$want] )) && (( $+commands[$have] )); then
+      ln -sf "$commands[$have]" "$HOME/.local/bin/$want"
+    fi
+  done
+  rehash
+}
+
+__rulix_dev_ensure_tools() {
+  local os="$(__rulix_dev_os)" cmd brew_pkg apt_pkg
+  local -a pkgs
+
+  [[ "$os" == debian ]] && __rulix_dev_debian_renames
+
+  for cmd brew_pkg apt_pkg in "${__RULIX_DEV_TOOLS[@]}"; do
+    (( $+commands[$cmd] )) && continue
+    case "$os" in
+      macos)  pkgs+=("$brew_pkg") ;;
+      debian) pkgs+=("$apt_pkg") ;;
+    esac
+  done
+  (( ${#pkgs} )) || return 0
+
+  echo "Installing missing tools: ${pkgs[*]}"
+  case "$os" in
+    macos)
+      (( $+commands[brew] )) || { echo "ERROR: Homebrew not found (https://brew.sh)" >&2; return 1; }
+      brew install "${pkgs[@]}" || return 1
+      ;;
+    debian)
+      sudo apt-get update -qq && sudo apt-get install -y "${pkgs[@]}" || return 1
+      __rulix_dev_debian_renames
+      ;;
+    *)
+      echo "ERROR: don't know how to install ${pkgs[*]} on '$os'" >&2
+      return 1
+      ;;
+  esac
+  rehash
+}

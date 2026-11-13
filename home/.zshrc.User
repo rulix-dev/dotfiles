@@ -12,7 +12,7 @@ fi
 # -----------------------------------------------------------------------------
 
 ## Unsetting context to make sure every time the context is needed (avoid accidental commands)
-kubectl config unset current-context
+(( $+commands[kubectl] )) && kubectl config unset current-context
 
 alias ls='ls --color'
 

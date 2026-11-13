@@ -1,9 +1,21 @@
+# Tools installed in the user's home (zoxide, go, rust, our scripts) must be on
+# PATH from the first run on, also before the rest of the config is stowed.
+typeset -U path
+path=("$HOME/.local/bin" "$HOME/go/bin" "$HOME/.cargo/bin" $path)
+
+# OS detection and required tools: see .zshrc.platform (sourced from the real
+# file, so it works before stow has linked anything).
+source "${${(%):-%x}:A:h}/.zshrc.platform"
 
 __rulix_dev_stow_dotfiles() {
   local STOW_ROOT="$1"
   [[ -n "$STOW_ROOT" ]] || { echo "ERROR: STOW_ROOT is empty" >&2; return 1; }
   [[ -d "$STOW_ROOT" ]] || { echo "ERROR: '$STOW_ROOT' is not a valid directory" >&2; return 1; }
   [[ -f "$STOW_ROOT/.zshrc" && ! -L "$STOW_ROOT/.zshrc" ]] || { echo "ERROR: '$STOW_ROOT/.zshrc' not found or is a symlink" >&2; return 1; }
+
+  # Check stow BEFORE removing anything from $HOME (it removes the files it is
+  # about to replace: without stow, that left $HOME with no .zshrc at all)
+  (( $+commands[stow] )) || { echo "ERROR: stow not found (see __rulix_dev_ensure_tools)" >&2; return 1; }
 
   local STOW_PARENT="$(dirname "$STOW_ROOT")"
   local PACKAGE="$(basename "$STOW_ROOT")"
@@ -47,6 +59,10 @@ __rulix_dev_zsh_setup() {
         return 0
     fi
 
+    # Required CLI tools (brew/apt). Abort without the sentinel if this fails,
+    # so the next shell tries again.
+    __rulix_dev_ensure_tools || { echo "ERROR: missing tools, setup aborted (will retry next shell)" >&2; return 1; }
+
     # Rust Installation
     curl https://sh.rustup.rs -sSf | sh -s -- -y
 
@@ -56,14 +72,17 @@ __rulix_dev_zsh_setup() {
     # starship
     sudo curl -sS https://starship.rs/install.sh | sh -s -- -y
 
-    # gh dash
-    gh extension install dlvhdr/gh-dash
+    # gh dash (needs a logged-in gh)
+    if gh auth status &>/dev/null; then
+      gh extension install dlvhdr/gh-dash
+    else
+      echo "WARN: gh not logged in: run 'gh auth login' and then 'gh extension install dlvhdr/gh-dash'" >&2
+    fi
 
-    # sesh tmux plugin
-    go install github.com/joshmedeski/sesh/v2@latest
-
-    # gum 
-    go install github.com/charmbracelet/gum@latest
+    # sesh tmux plugin / gum. GOTOOLCHAIN=auto lets an older system Go (Debian's
+    # golang-go, set to "local") download the toolchain these modules require.
+    GOTOOLCHAIN=auto go install github.com/joshmedeski/sesh/v2@latest
+    GOTOOLCHAIN=auto go install github.com/charmbracelet/gum@latest
 
     # fzf
     git -C "$HOME/.fzf" pull 2>/dev/null || \
@@ -76,21 +95,21 @@ __rulix_dev_zsh_setup() {
     $HOME/rulix-dev/dotfiles/install.sh
 
     # stow dotfiles
-    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target/home"
+    __rulix_dev_stow_dotfiles "$HOME/rulix-dev/dotfiles/target/home" || return 1
 
     # tmux plugins
     git -C "$HOME/.tmux/plugins/tpm" pull 2>/dev/null || \
       git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
     ~/.tmux/plugins/tpm/bin/install_plugins
-    # tmux reload
-    tmux source-file ~/.tmux.conf
+    # tmux reload (only if a tmux server is running)
+    tmux info &>/dev/null && tmux source-file ~/.tmux.conf
 
 
     # Merge Claude Settings
     __rulix_dev_merge_claude_settings
 
-    # Pi coding agent, configured like Claude
-    __rulix_dev_pi_setup
+    # Pi coding agent, configured like Claude (Datadog tooling: work machine only)
+    __rulix_dev_is_work && __rulix_dev_pi_setup
 
     # Create file to avoid setup next time
     touch "${HOME}/.zshrc.setup"
@@ -139,6 +158,8 @@ __rulix_dev_merge_claude_settings() {
 # and re-added (re-running means re-authenticating them); others are left alone.
 __rulix_dev_claude_mcp_sync() {
   command -v claude &>/dev/null || return 0
+  # These are the work (Datadog/Atlassian/Google Workspace) servers
+  __rulix_dev_is_work || return 0
 
   # All GA toolsets plus the read-only previews (apm, investigator,
   # live-debugger); remote-actions left out on purpose.
@@ -205,9 +226,12 @@ __rulix_dev_zsh_setup
 
 [[ -s "$HOME/.zshrc.Claude" ]] && source "$HOME/.zshrc.Claude"
 
-for f in "$HOME"/.zshrc.dd*; do
-    [[ -s "$f" ]] && source "$f"
-done
+# Datadog-only config: work machine only. (N): no error if there are none.
+if __rulix_dev_is_work; then
+  for f in "$HOME"/.zshrc.dd*(N); do
+      [[ -s "$f" ]] && source "$f"
+  done
+fi
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 

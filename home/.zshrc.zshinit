@@ -81,6 +81,8 @@ export FZF_ALT_T_COMMAND=$FZF_DEFAULT_COMMAND
 export FZF_CTRL_T_OPTS="--preview 'bat --color=always -n --line-range :500 {}'"
 export FZF_ALT_T_OPTS="--preview 'eza --tree --color=always {}| head -200'"
 
+# scfw (Datadog supply-chain firewall) only exists on the work machine
+if (( $+commands[scfw] )); then
 # BEGIN SCFW MANAGED BLOCK
 alias npm="scfw run npm"
 alias pip="scfw run pip"
@@ -89,6 +91,7 @@ export SCFW_DD_AGENT_LOG_PORT="10365"
 export SCFW_DD_LOG_LEVEL="ALLOW"
 export SCFW_HOME="/Users/raul.perezclavero/.scfw"
 # END SCFW MANAGED BLOCK
+fi
 
 # The following lines have been added by Docker Desktop to enable Docker CLI completions.
 fpath=(~/.docker/completions $fpath)

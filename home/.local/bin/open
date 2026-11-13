@@ -4,6 +4,9 @@
 # the main Chrome profile instead of the last-used one.
 # Everything else is passed through to the system `open` untouched.
 
+# Linux: /usr/bin/open is openvt there, not a file/URL opener
+[ "$(uname)" = Darwin ] || exec xdg-open "$@"
+
 CHROME_PROFILE="Default" # DDOG (raul.perezclavero@datadoghq.com)
 
 if [ "$#" -eq 1 ]; then
