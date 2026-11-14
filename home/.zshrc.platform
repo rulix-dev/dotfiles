@@ -51,7 +51,6 @@ typeset -gA __RULIX_DEV_DEBIAN_RENAMES=(
 # Make the Debian-renamed binaries available under their usual name.
 __rulix_dev_debian_renames() {
   local want have
-  mkdir -p "$HOME/.local/bin"
   for want have in "${(@kv)__RULIX_DEV_DEBIAN_RENAMES}"; do
     if (( ! $+commands[$want] )) && (( $+commands[$have] )); then
       ln -sf "$commands[$have]" "$HOME/.local/bin/$want"
@@ -63,6 +62,9 @@ __rulix_dev_debian_renames() {
 __rulix_dev_ensure_tools() {
   local os="$(__rulix_dev_os)" cmd brew_pkg apt_pkg
   local -a pkgs
+
+  # Per-user binaries (starship, zoxide, Debian renames...), on every OS
+  mkdir -p "$HOME/.local/bin"
 
   [[ "$os" == debian ]] && __rulix_dev_debian_renames
 

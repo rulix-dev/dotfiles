@@ -70,7 +70,7 @@ __rulix_dev_zsh_setup() {
     curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
 
     # starship
-    sudo curl -sS https://starship.rs/install.sh | sh -s -- -y
+    curl -sS https://starship.rs/install.sh | sh -s -- -y --bin-dir "$HOME/.local/bin"
 
     # gh dash (needs a logged-in gh)
     if gh auth status &>/dev/null; then
@@ -235,13 +235,13 @@ fi
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
-# Shell integrations
-eval "$(fzf --zsh)"
+# Shell integrations (only if installed: a failed install must not break the shell)
+(( $+commands[fzf] )) && eval "$(fzf --zsh)"
 
 # starship
-eval "$(starship init zsh)"
+(( $+commands[starship] )) && eval "$(starship init zsh)"
 
 # zoxide must be initialized last
-eval "$(zoxide init --cmd cd zsh)"
+(( $+commands[zoxide] )) && eval "$(zoxide init --cmd cd zsh)"
 
 [[ -s "$HOME/.zshrc.User" ]] && source "$HOME/.zshrc.User"
