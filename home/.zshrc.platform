@@ -28,6 +28,7 @@ __rulix_dev_is_work() {
 typeset -ga __RULIX_DEV_TOOLS=(
   # cmd     brew      apt
   git       git       git
+  git-lfs   git-lfs   git-lfs     # .gitconfig makes the LFS filter required: without it, clones of LFS repos break
   curl      curl      curl
   jq        jq        jq
   stow      stow      stow
