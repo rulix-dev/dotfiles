@@ -1,0 +1,762 @@
+#!/usr/bin/env python3
+"""mux - one session picker and task-session helper for tmux and herdr.
+
+  mux pick [--mux tmux|herdr]        fzf picker (sesh-style) for either backend
+  mux replicate [SESSION...|--all]   copy tmux sessions into herdr workspaces,
+                                     moving running Claude sessions along
+  mux open --label L --cwd D [--run CMD] [--mux M] [--focus]
+                                     find-or-create a session/workspace (JSON out)
+  mux status --label L               where L exists, in both backends (JSON out)
+  mux close --label L [--mux M]      close the tmux session / herdr workspace
+  mux backend [--mux M]              print the backend that would be used
+
+Backend choice: an explicit --mux (or $MUX) wins; otherwise tmux inside tmux,
+herdr inside herdr, and $MUX_PREFERRED (default herdr) anywhere else.
+"""
+import argparse
+import json
+import os
+import random
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import termios
+import time
+from pathlib import Path
+
+HOME = str(Path.home())
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+NAMES_FILE = CONFIG / "mux-picker" / "got-names.txt"
+CLAUDE_SESSIONS = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "sessions"
+SELF = os.path.abspath(sys.argv[0])
+SHELLS = {"zsh", "bash", "sh", "fish", "-zsh", "-bash"}
+
+# Claude flags that are carried over when a session is resumed elsewhere.
+CLAUDE_FLAGS_NOARG = {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--verbose"}
+CLAUDE_FLAGS_ARG = {"--model", "--permission-mode", "--add-dir", "--effort", "--settings", "--mcp-config", "--agent"}
+
+C = {"dim": "\033[90m", "mag": "\033[35m", "blu": "\033[34m", "grn": "\033[32m",
+     "yel": "\033[33m", "red": "\033[31m", "cya": "\033[36m", "off": "\033[39m"}
+STATUS_STYLE = {"working": ("yel", "◐"), "blocked": ("red", "!"), "idle": ("grn", "✓"), "done": ("grn", "✓")}
+
+
+class MuxError(Exception):
+    pass
+
+
+def tilde(path):
+    if not path:
+        return ""
+    return "~" + path[len(HOME):] if path == HOME or path.startswith(HOME + "/") else path
+
+
+def norm(path):
+    return os.path.normpath(os.path.expanduser(path)) if path else path
+
+
+def same_dir(a, b):
+    if not a or not b:
+        return False
+    a, b = norm(a), norm(b)
+    return a == b or os.path.realpath(a) == os.path.realpath(b)
+
+
+def run(cmd, check=True, **kw):
+    p = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    if check and p.returncode != 0:
+        raise MuxError(f"{' '.join(map(shlex.quote, cmd))}: {(p.stderr or p.stdout).strip()}")
+    return p
+
+
+# --------------------------------------------------------------------------- backend
+
+def in_tmux():
+    return bool(os.environ.get("TMUX"))
+
+
+def in_herdr():
+    # Popups started by herdr custom commands get HERDR_ACTIVE_* but not HERDR_ENV.
+    return os.environ.get("HERDR_ENV") == "1" or bool(os.environ.get("HERDR_ACTIVE_WORKSPACE_ID"))
+
+
+def backend(explicit=None):
+    choice = explicit or os.environ.get("MUX")
+    if choice and choice != "auto":
+        if choice not in ("tmux", "herdr"):
+            raise MuxError(f"unknown backend {choice!r} (use tmux, herdr or auto)")
+        return choice
+    # The innermost multiplexer wins: tmux run inside a herdr pane sets $TMUX.
+    if in_tmux():
+        return "tmux"
+    if in_herdr():
+        return "herdr"
+    preferred = os.environ.get("MUX_PREFERRED", "herdr")
+    return preferred if preferred in ("tmux", "herdr") else "herdr"
+
+
+# --------------------------------------------------------------------------- herdr
+
+def herdr_bin():
+    # HERDR_BIN_PATH is the binary that owns the current server; fall back to PATH.
+    return os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr") or "herdr"
+
+
+def herdr(*args, check=True):
+    p = run([herdr_bin(), *args], check=check)
+    out = p.stdout.strip()
+    if not out:
+        return {}
+    try:
+        return json.loads(out).get("result", {})
+    except json.JSONDecodeError:
+        return {}
+
+
+def herdr_socket():
+    return os.environ.get("HERDR_SOCKET_PATH") or str(CONFIG / "herdr" / "herdr.sock")
+
+
+def herdr_alive():
+    if not os.path.exists(herdr_socket()):
+        return False
+    return run([herdr_bin(), "workspace", "list"], check=False).returncode == 0
+
+
+def herdr_ensure_server():
+    if herdr_alive():
+        return
+    # Use the PATH `herdr` (the workspace shim) so its restore adapter runs too.
+    subprocess.Popen(["herdr", "server"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(100):
+        if herdr_alive():
+            return
+        time.sleep(0.1)
+    raise MuxError("herdr server did not come up")
+
+
+def herdr_workspaces():
+    """Workspaces with their home cwd (first pane of the first tab) and agents."""
+    if not herdr_alive():
+        return []
+    snap = herdr("api", "snapshot").get("snapshot", {})
+    tabs, panes = {}, {}
+    for t in snap.get("tabs", []):
+        tabs.setdefault(t["workspace_id"], []).append(t)
+    for p in snap.get("panes", []):
+        panes.setdefault(p["tab_id"], []).append(p)
+    result = []
+    for w in snap.get("workspaces", []):
+        wtabs = sorted(tabs.get(w["workspace_id"], []), key=lambda t: t["number"])
+        cwd = next((panes[t["tab_id"]][0]["cwd"] for t in wtabs if panes.get(t["tab_id"])), None)
+        wpanes = [p for t in wtabs for p in panes.get(t["tab_id"], [])]
+        agents = [a for a in snap.get("agents", []) if a.get("workspace_id") == w["workspace_id"]]
+        result.append({**w, "cwd": cwd, "tabs": wtabs, "panes": wpanes, "agents": agents})
+    return sorted(result, key=lambda w: w["number"])
+
+
+def herdr_find(workspaces, label=None, cwd=None):
+    if label is not None:
+        for w in workspaces:
+            if w["label"] == label:
+                return w
+    if cwd is not None:
+        for w in workspaces:
+            if same_dir(w["cwd"], cwd):
+                return w
+    return None
+
+
+def herdr_wait_ready(pane_id, timeout=8.0):
+    """Wait until the new pane's shell has printed something (its prompt)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        p = run([herdr_bin(), "pane", "read", pane_id, "--source", "visible", "--lines", "5"], check=False)
+        if p.returncode == 0 and p.stdout.strip():
+            return
+        time.sleep(0.2)
+
+
+def herdr_run(pane_id, command):
+    herdr_wait_ready(pane_id)
+    herdr("pane", "run", pane_id, command)
+
+
+def herdr_create(cwd, label, focus=False):
+    res = herdr("workspace", "create", "--cwd", cwd, "--label", label, "--focus" if focus else "--no-focus")
+    return res["workspace"]["workspace_id"], res["root_pane"]["pane_id"], res["tab"]["tab_id"]
+
+
+def herdr_focus(ws_id, attach):
+    herdr("workspace", "focus", ws_id)
+    if attach:
+        # Not inside herdr: attach a client (PATH shim, so restore hooks run).
+        os.execvp("herdr", ["herdr"])
+
+
+def unique_label(base, workspaces):
+    labels = {w["label"] for w in workspaces}
+    return base if base not in labels else next(f"{base}-{i}" for i in range(2, 1000) if f"{base}-{i}" not in labels)
+
+
+# --------------------------------------------------------------------------- tmux
+
+def tmux(*args, check=True):
+    return run(["tmux", *args], check=check).stdout
+
+
+def tmux_alive():
+    return shutil.which("tmux") is not None and run(["tmux", "list-sessions"], check=False).returncode == 0
+
+
+def tmux_has(name):
+    return shutil.which("tmux") is not None and run(["tmux", "has-session", "-t", f"={name}"], check=False).returncode == 0
+
+
+def tmux_sessions():
+    if not tmux_alive():
+        return []
+    rows = tmux("list-sessions", "-F", "#{session_name}\t#{session_path}\t#{session_attached}\t#{session_windows}")
+    out = []
+    for line in rows.splitlines():
+        name, path, attached, windows = line.split("\t")
+        out.append({"name": name, "path": path, "attached": attached != "0", "windows": int(windows)})
+    return out
+
+
+def tmux_panes(target):
+    fmt = "\t".join(["#{window_index}", "#{window_name}", "#{window_active}", "#{pane_index}", "#{pane_id}",
+                     "#{pane_pid}", "#{pane_current_path}", "#{pane_current_command}", "#{pane_left}",
+                     "#{pane_top}", "#{pane_active}"])
+    rows = tmux("list-panes", "-s", "-t", f"={target}", "-F", fmt)
+    keys = ["window_index", "window_name", "window_active", "pane_index", "pane_id", "pane_pid", "path",
+            "command", "left", "top", "active"]
+    panes = []
+    for line in rows.splitlines():
+        p = dict(zip(keys, line.split("\t")))
+        for k in ("window_index", "pane_index", "pane_pid", "left", "top"):
+            p[k] = int(p[k])
+        panes.append(p)
+    return sorted(panes, key=lambda p: (p["window_index"], p["pane_index"]))
+
+
+# --------------------------------------------------------------------------- claude
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def claude_by_tmux_pane():
+    """Live Claude processes keyed by tmux pane id (%N), from ~/.claude/sessions/*.json."""
+    found = {}
+    if not CLAUDE_SESSIONS.is_dir():
+        return found
+    for f in CLAUDE_SESSIONS.glob("*.json"):
+        try:
+            info = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        pid, where = info.get("pid"), info.get("tmux") or ""
+        if not pid or "%" not in where or not pid_alive(pid) or info.get("kind", "interactive") != "interactive":
+            continue
+        pane_id = "%" + where.rsplit("%", 1)[1]
+        prev = found.get(pane_id)
+        if not prev or info.get("startedAt", 0) > prev.get("startedAt", 0):
+            found[pane_id] = info
+    return found
+
+
+def claude_resume_command(info):
+    try:
+        argv = Path(f"/proc/{info['pid']}/cmdline").read_bytes().split(b"\0")
+        argv = [a.decode() for a in argv if a]
+    except OSError:
+        argv = []
+    keep, i = [], 1
+    while i < len(argv):
+        a = argv[i]
+        flag = a.split("=", 1)[0]
+        if a in CLAUDE_FLAGS_NOARG:
+            keep.append(a)
+        elif flag in CLAUDE_FLAGS_ARG:
+            if "=" in a:
+                keep.append(a)
+            elif i + 1 < len(argv):
+                keep += [a, argv[i + 1]]
+                i += 1
+        i += 1
+    projects = CLAUDE_SESSIONS.parent / "projects"
+    if any(projects.glob(f"*/{info['sessionId']}.jsonl")):
+        start = ["--resume", info["sessionId"]]
+    else:
+        # A session that never got a message has no transcript to resume.
+        start = ["--name", shlex.quote(info["name"])] if info.get("name") else []
+    return " ".join(["claude", *start, *map(shlex.quote, keep)])
+
+
+def stop_process(pid, timeout=15.0):
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+# --------------------------------------------------------------------------- names
+
+def got_names():
+    names = []
+    try:
+        for line in NAMES_FILE.read_text().splitlines():
+            line = line.split("#", 1)[0]
+            names += line.split()
+    except OSError:
+        pass
+    return names or ["jon_snow", "arya_stark", "tyrion_lannister"]
+
+
+def random_name():
+    taken = {s["name"] for s in tmux_sessions()} | {w["label"] for w in herdr_workspaces()}
+    free = [n for n in got_names() if n not in taken]
+    return random.choice(free) if free else f"session-{int(time.time())}"
+
+
+def prompt(text):
+    """Read one line from the terminal, whatever mode it was left in.
+
+    Called from the zsh widget (Alt+s), the tty is still in zle's raw mode:
+    no line buffering, no echo and Enter arriving as \r, so a plain readline
+    never returns. Switch to canonical mode for the prompt and restore after.
+    Returns None when there is no terminal.
+    """
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        saved = termios.tcgetattr(fd)
+        mode = termios.tcgetattr(fd)
+        mode[0] |= termios.ICRNL
+        mode[3] |= termios.ICANON | termios.ECHO | termios.ECHOE | termios.ISIG
+        termios.tcsetattr(fd, termios.TCSANOW, mode)
+        try:
+            os.write(fd, text.encode())
+            with os.fdopen(os.dup(fd), "r") as tty:
+                return tty.readline().strip()
+        finally:
+            termios.tcsetattr(fd, termios.TCSANOW, saved)
+    except termios.error:
+        return None
+    finally:
+        os.close(fd)
+
+
+def ask_name():
+    suggestion = random_name()
+    return prompt(f"Session name [{suggestion}]: ") or suggestion
+
+
+# --------------------------------------------------------------------------- picker lists
+
+def herdr_ws_line(w):
+    status = ""
+    for a in w["agents"]:
+        color, icon = STATUS_STYLE.get(a.get("agent_status"), ("dim", "·"))
+        status += f" {C[color]}{icon} {a.get('agent', '?')}{C['off']}"
+    focus = f" {C['cya']}●{C['off']}" if w.get("focused") else ""
+    return f"{C['mag']}◆{C['off']} {w['label']}{focus}  {C['dim']}{tilde(w['cwd'])}{C['off']}{status}\tws:{w['workspace_id']}"
+
+
+def candidate_dirs():
+    dirs, seen = [], set()
+    for flag in ("-c", "-z"):
+        if not shutil.which("sesh"):
+            break
+        for line in run(["sesh", "list", flag], check=False).stdout.splitlines():
+            d = norm(line.strip())
+            if d and d not in seen and os.path.isdir(d):
+                seen.add(d)
+                dirs.append(d)
+    return dirs
+
+
+def list_herdr(kind):
+    lines = []
+    workspaces = herdr_workspaces()
+    if kind in ("all", "workspaces"):
+        lines.append(f"{C['grn']}⊕{C['off']} New session\tnew")
+        lines += [herdr_ws_line(w) for w in workspaces]
+    if kind in ("all", "dirs"):
+        for d in candidate_dirs():
+            if not herdr_find(workspaces, cwd=d):
+                lines.append(f"{C['blu']}▸{C['off']} {tilde(d)}\tdir:{d}")
+    if kind == "tmux":
+        for s in tmux_sessions():
+            moved = f" {C['dim']}(already in herdr){C['off']}" if herdr_find(workspaces, label=s["name"]) else ""
+            lines.append(f"{C['cya']}▣{C['off']} {s['name']}  {C['dim']}{tilde(s['path'])}{C['off']}{moved}\ttmux:{s['name']}")
+    if kind == "find":
+        lines += [f"{C['blu']}▸{C['off']} {tilde(d)}\tdir:{d}" for d in find_dirs()]
+    return lines
+
+
+def find_dirs():
+    if shutil.which("fd"):
+        out = run(["fd", "-H", "-d", "2", "-t", "d", "-E", ".Trash", ".", HOME], check=False).stdout
+    else:
+        out = run(["find", HOME, "-mindepth", "1", "-maxdepth", "2", "-type", "d", "-not", "-path", "*/.*"],
+                  check=False).stdout
+    return sorted(norm(l) for l in out.splitlines() if l.strip())
+
+
+def preview(key):
+    kind, _, value = key.partition(":")
+    if kind == "ws":
+        w = next((w for w in herdr_workspaces() if w["workspace_id"] == value), None)
+        if not w:
+            return
+        print(f"{w['label']}  {tilde(w['cwd'])}\n")
+        for t in w["tabs"]:
+            print(f"tab {t['number']}: {t['label']}")
+            for p in (p for p in w["panes"] if p["tab_id"] == t["tab_id"]):
+                agent = next((a for a in w["agents"] if a["pane_id"] == p["pane_id"]), None)
+                extra = f"  [{agent['agent']} {agent['agent_status']}]" if agent else ""
+                print(f"  {p['pane_id']}  {tilde(p['foreground_cwd'] or p['cwd'])}{extra}")
+        target = next((a["pane_id"] for a in w["agents"]), None) or (w["panes"][0]["pane_id"] if w["panes"] else None)
+        if target:
+            print("\n" + run([herdr_bin(), "pane", "read", target, "--source", "visible", "--lines", "40"],
+                             check=False).stdout)
+    elif kind == "dir":
+        print(run(["ls", "-la", "--color=always", value], check=False).stdout)
+    elif kind == "tmux":
+        if shutil.which("sesh"):
+            print(run(["sesh", "preview", value], check=False).stdout)
+        else:
+            print(tmux("capture-pane", "-e", "-p", "-t", f"={value}", check=False))
+
+
+def kill(key):
+    kind, _, value = key.partition(":")
+    if kind == "ws":
+        herdr("workspace", "close", value, check=False)
+    elif kind == "tmux":
+        tmux("kill-session", "-t", f"={value}", check=False)
+
+
+# --------------------------------------------------------------------------- pick
+
+def fzf(lines, args):
+    p = subprocess.run(["fzf", *args], input="\n".join(lines), stdout=subprocess.PIPE, text=True)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def pick_tmux():
+    """The original sesh picker, unchanged in behaviour."""
+    reload_all = "echo '⊕ New session'; sesh list -i"
+    choice = fzf(["⊕ New session", *run(["sesh", "list", "-i"], check=False).stdout.splitlines()], [
+        "--height", "40%", "--reverse", "--ansi", "--border-label", " sesh ", "--border", "--prompt", "⚡  ",
+        "--header", "  ^a all ^t tmux ^g configs ^x zoxide ^d tmux kill ^f find",
+        "--bind", "tab:down,btab:up",
+        "--bind", f"ctrl-a:change-prompt(⚡  )+reload({reload_all})",
+        "--bind", "ctrl-t:change-prompt(🪟  )+reload(echo '⊕ New session'; sesh list -t -i)",
+        "--bind", "ctrl-g:change-prompt(⚙️  )+reload(sesh list -c -i)",
+        "--bind", "ctrl-x:change-prompt(📁  )+reload(sesh list -z -i)",
+        "--bind", f"ctrl-f:change-prompt(🔎  )+reload({shlex.quote(SELF)} _find-plain)",
+        "--bind", f"ctrl-d:execute(tmux kill-session -t {{2..}})+change-prompt(⚡  )+reload({reload_all})",
+    ])
+    if not choice:
+        return
+    if choice == "⊕ New session":
+        name = ask_name()
+        tmux("new-session", "-d", "-s", name)
+        os.execvp("tmux", ["tmux", "switch-client" if in_tmux() else "attach-session", "-t", f"={name}"])
+    os.execvp("sesh", ["sesh", "connect", choice])
+
+
+def pick_herdr():
+    herdr_ensure_server()
+    me = shlex.quote(SELF)
+    choice = fzf(list_herdr("all"), [
+        # A herdr popup (HERDR_ACTIVE_* without HERDR_ENV) is already sized; fill it.
+        "--height", "100%" if in_herdr() and os.environ.get("HERDR_ENV") != "1" else "60%",
+        "--reverse", "--ansi", "--no-sort", "--border-label", " herdr ", "--border", "--prompt", "⚡  ",
+        "--delimiter", "\t", "--with-nth", "1",
+        "--header", "  ^a all ^w spaces ^x dirs ^t tmux→herdr ^f find ^d close",
+        "--bind", "tab:down,btab:up",
+        "--bind", f"ctrl-a:change-prompt(⚡  )+reload({me} _list herdr all)",
+        "--bind", f"ctrl-w:change-prompt(◆  )+reload({me} _list herdr workspaces)",
+        "--bind", f"ctrl-x:change-prompt(📁  )+reload({me} _list herdr dirs)",
+        "--bind", f"ctrl-t:change-prompt(▣  )+reload({me} _list herdr tmux)",
+        "--bind", f"ctrl-f:change-prompt(🔎  )+reload({me} _list herdr find)",
+        "--bind", f"ctrl-d:execute({me} _kill {{2}})+reload({me} _list herdr all)",
+        "--preview", f"{me} _preview {{2}}", "--preview-window", "right:55%",
+    ])
+    if not choice:
+        return  # Esc: nothing is created
+    key = choice.split("\t", 1)[1]
+    kind, _, value = key.partition(":")
+    attach = not in_herdr()
+    if kind == "ws":
+        herdr_focus(value, attach)
+    elif kind == "dir":
+        workspaces = herdr_workspaces()
+        existing = herdr_find(workspaces, cwd=value)
+        if existing:
+            herdr_focus(existing["workspace_id"], attach)
+            return
+        label = unique_label(os.path.basename(value.rstrip("/")) or "~", workspaces)
+        ws_id, _, _ = herdr_create(value, label, focus=True)
+        herdr_focus(ws_id, attach)
+    elif kind == "new":
+        name = ask_name()
+        ws_id, _, _ = herdr_create(HOME, unique_label(name, herdr_workspaces()), focus=True)
+        herdr_focus(ws_id, attach)
+    elif kind == "tmux":
+        ws_id = replicate_session(value, assume_yes=False, force=False, dry_run=False)
+        if ws_id:
+            herdr_focus(ws_id, attach)
+
+
+# --------------------------------------------------------------------------- replicate
+
+def replicate_session(name, assume_yes, force, dry_run):
+    """Copy one tmux session into a herdr workspace with the same label.
+
+    Windows become tabs, panes become splits in the same directories. A live
+    Claude in a pane is stopped in tmux (SIGTERM, only when idle unless
+    --force) and resumed with `claude --resume <id>` in the matching herdr pane,
+    so a conversation never has two writers. The tmux session itself is left
+    alive for you to kill. Returns the workspace id (existing or new).
+    """
+    if not dry_run:
+        herdr_ensure_server()
+    if not tmux_has(name):
+        raise MuxError(f"tmux session {name!r} not found")
+    existing = herdr_find(herdr_workspaces(), label=name)
+    if existing:
+        print(f"{name}: already in herdr as {existing['workspace_id']}, skipping")
+        return existing["workspace_id"]
+
+    panes = tmux_panes(name)
+    claudes = claude_by_tmux_pane()
+    plan = []
+    for p in panes:
+        info = claudes.get(p["pane_id"])
+        action = "shell"
+        if info:
+            action = "claude"
+            if info.get("status") not in (None, "idle") and not force:
+                action = "claude-busy"
+        elif p["command"] not in SHELLS:
+            action = "other"
+        plan.append((p, info, action))
+
+    print(f"tmux {name} → herdr workspace {name!r}")
+    for p, info, action in plan:
+        where = f"  window {p['window_index']} ({p['window_name']}) pane {p['pane_index']}  {tilde(p['path'])}"
+        if action == "claude":
+            print(f"{where}\n      claude {info.get('name') or ''} {info['sessionId']}: stop in tmux, resume in herdr")
+        elif action == "claude-busy":
+            print(f"{where}\n      claude is {info.get('status')}: left in tmux, herdr pane gets a shell (use --force)")
+        elif action == "other":
+            print(f"{where}\n      runs {p['command']}: not relaunched, herdr pane gets a shell")
+        else:
+            print(where)
+    if dry_run:
+        return None
+    if any(a == "claude" for _, _, a in plan) and not assume_yes:
+        answer = prompt("Move the Claude sessions above from tmux to herdr? [y/N] ")
+        if answer is None:
+            raise MuxError("needs confirmation: rerun with --yes")
+        if answer.lower() not in ("y", "yes", "s", "si", "sí"):
+            print("aborted")
+            return None
+
+    ws_id = tab_id = None
+    prev = None  # previous tmux pane in the same window, with its herdr pane id
+    moved = []
+    for p, info, action in plan:
+        cwd = (info or {}).get("cwd") or p["path"] or HOME
+        if ws_id is None:
+            ws_id, pane_id, tab_id = herdr_create(cwd, name)
+            herdr("tab", "rename", tab_id, p["window_name"], check=False)
+        elif prev is None or prev[0]["window_index"] != p["window_index"]:
+            res = herdr("tab", "create", "--workspace", ws_id, "--cwd", cwd, "--label", p["window_name"], "--no-focus")
+            tab_id, pane_id = res["tab"]["tab_id"], res["root_pane"]["pane_id"]
+        else:
+            # Approximate tmux geometry: same row → split right, otherwise down.
+            direction = "right" if p["top"] == prev[0]["top"] else "down"
+            res = herdr("pane", "split", prev[1], "--direction", direction, "--cwd", cwd, "--no-focus")
+            pane_id = res["pane"]["pane_id"]
+        prev = (p, pane_id)
+        if action == "claude":
+            moved.append((info, pane_id))
+
+    for info, pane_id in moved:
+        if not stop_process(info["pid"]):
+            print(f"  claude {info['sessionId']} did not exit in tmux; not resuming it in herdr")
+            continue
+        herdr_run(pane_id, claude_resume_command(info))
+        print(f"  claude {info.get('name') or info['sessionId']} → herdr pane {pane_id}")
+    print(f"{name}: done ({ws_id}). The tmux session is still alive; kill it when you are happy.")
+    return ws_id
+
+
+# --------------------------------------------------------------------------- open / status / close
+
+def status(label):
+    out = {"label": label, "tmux": {"exists": False}, "herdr": {"exists": False}}
+    if tmux_has(label):
+        claudes = claude_by_tmux_pane()
+        out["tmux"] = {"exists": True, "panes": [
+            {"target": f"{p['window_index']}.{p['pane_index']}", "pane_id": p["pane_id"], "window": p["window_name"],
+             "command": p["command"], "cwd": p["path"],
+             "claude": bool(claudes.get(p["pane_id"])) or p["command"] == "claude"} for p in tmux_panes(label)]}
+    w = herdr_find(herdr_workspaces(), label=label)
+    if w:
+        out["herdr"] = {"exists": True, "workspace_id": w["workspace_id"], "cwd": w["cwd"],
+                        "panes": [{"pane_id": p["pane_id"], "cwd": p["cwd"]} for p in w["panes"]],
+                        "agents": [{"pane_id": a["pane_id"], "agent": a.get("agent"),
+                                    "status": a.get("agent_status")} for a in w["agents"]]}
+    return out
+
+
+def open_session(which, label, cwd, command, focus):
+    cwd = norm(cwd)
+    result = {"backend": which, "label": label, "created": False, "ran": False}
+    if which == "herdr":
+        herdr_ensure_server()
+        w = herdr_find(herdr_workspaces(), label=label)
+        if not w:
+            ws_id, pane_id, _ = herdr_create(cwd, label)
+            result.update(created=True, workspace_id=ws_id)
+            target = pane_id
+        else:
+            result["workspace_id"] = w["workspace_id"]
+            busy = next((a for a in w["agents"] if a.get("agent")), None)
+            target = None
+            if command and busy:
+                result["skipped"] = f"agent {busy['agent']} already running in {busy['pane_id']}"
+            elif command:
+                res = herdr("tab", "create", "--workspace", w["workspace_id"], "--cwd", cwd, "--label", "agent",
+                            "--no-focus")
+                target = res["root_pane"]["pane_id"]
+        if command and target:
+            herdr_run(target, command)
+            result.update(ran=True, pane_id=target)
+        if focus:
+            herdr("workspace", "focus", result["workspace_id"])
+    else:
+        if not tmux_has(label):
+            tmux("new-session", "-d", "-s", label, "-c", cwd)
+            result["created"] = True
+        target = None
+        if command:
+            panes = tmux_panes(label)
+            busy = next((p for p in panes if p["command"] == "claude" or p["pane_id"] in claude_by_tmux_pane()), None)
+            if busy:
+                result["skipped"] = f"claude already running in {label}:{busy['window_index']}.{busy['pane_index']}"
+            else:
+                free = next((p for p in panes if p["window_name"] == "agent" and p["command"] in SHELLS), None)
+                target = free["pane_id"] if free else tmux(
+                    "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", f"={label}:", "-n", "agent", "-c", cwd).strip()
+                tmux("send-keys", "-t", target, command, "Enter")
+                result.update(ran=True, pane_id=target)
+        if focus and in_tmux():
+            tmux("switch-client", "-t", f"={label}")
+    return result
+
+
+def close_session(which, label):
+    closed = []
+    if which in ("tmux", "both") and tmux_has(label):
+        tmux("kill-session", "-t", f"={label}")
+        closed.append("tmux")
+    if which in ("herdr", "both"):
+        w = herdr_find(herdr_workspaces(), label=label)
+        if w:
+            herdr("workspace", "close", w["workspace_id"])
+            closed.append("herdr")
+    return {"label": label, "closed": closed}
+
+
+# --------------------------------------------------------------------------- main
+
+def main():
+    ap = argparse.ArgumentParser(prog="mux", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("pick")
+    p.add_argument("--mux")
+    p = sub.add_parser("replicate")
+    p.add_argument("sessions", nargs="*")
+    p.add_argument("--all", action="store_true", help="every tmux session not yet in herdr")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--yes", "-y", action="store_true", help="do not ask before moving Claude sessions")
+    p.add_argument("--force", action="store_true", help="also move Claude sessions that are busy")
+    p = sub.add_parser("open")
+    p.add_argument("--mux")
+    p.add_argument("--label", required=True)
+    p.add_argument("--cwd", required=True)
+    p.add_argument("--run", dest="command")
+    p.add_argument("--focus", action="store_true")
+    p = sub.add_parser("status")
+    p.add_argument("--label", required=True)
+    p = sub.add_parser("close")
+    p.add_argument("--mux", default="both")
+    p.add_argument("--label", required=True)
+    p = sub.add_parser("backend")
+    p.add_argument("--mux")
+    p = sub.add_parser("_list")
+    p.add_argument("backend")
+    p.add_argument("kind")
+    sub.add_parser("_find-plain")
+    p = sub.add_parser("_preview")
+    p.add_argument("key")
+    p = sub.add_parser("_kill")
+    p.add_argument("key")
+    a = ap.parse_args()
+
+    try:
+        if a.cmd == "pick":
+            pick_tmux() if backend(a.mux) == "tmux" else pick_herdr()
+        elif a.cmd == "replicate":
+            names = a.sessions or ([s["name"] for s in tmux_sessions()] if a.all else [])
+            if not names:
+                ap.error("give tmux session names or --all")
+            for name in names:
+                replicate_session(name, a.yes, a.force, a.dry_run)
+        elif a.cmd == "open":
+            print(json.dumps(open_session(backend(a.mux), a.label, a.cwd, a.command, a.focus)))
+        elif a.cmd == "status":
+            print(json.dumps(status(a.label)))
+        elif a.cmd == "close":
+            print(json.dumps(close_session(a.mux, a.label)))
+        elif a.cmd == "backend":
+            print(backend(a.mux))
+        elif a.cmd == "_list":
+            print("\n".join(list_herdr(a.kind)))
+        elif a.cmd == "_find-plain":
+            print("\n".join(find_dirs()))
+        elif a.cmd == "_preview":
+            preview(a.key)
+        elif a.cmd == "_kill":
+            kill(a.key)
+    except MuxError as e:
+        print(f"mux: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

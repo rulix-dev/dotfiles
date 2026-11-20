@@ -1,12 +1,12 @@
 ---
 name: rpc-handoff-task
-description: Bootstrap an isolated working environment for a task and stage a dedicated agent session that waits for instructions. Works for a JIRA ticket, a GitHub PR to review (URL or repo + number), a Datadog page (Slack message link, page URL or monitor URL) or a Datadog incident (incident URL or Slack incident channel ID), plus ad-hoc tasks. Parses a free-form prompt (asks when invoked without arguments or when something is unclear), gathers context into HANDOFF.md, and — after one confirmation gate — creates the workspace folder, tmux session, git worktrees (detached at the PR head for reviews), VS Code workspace and a Claude Code or pi session. Bootstrap only; the work itself is rpc-do-task. Never destructive.
+description: Bootstrap an isolated working environment for a task and stage a dedicated agent session that waits for instructions. Works for a JIRA ticket, a GitHub PR to review (URL or repo + number), a Datadog page (Slack message link, page URL or monitor URL) or a Datadog incident (incident URL or Slack incident channel ID), plus ad-hoc tasks. Parses a free-form prompt (asks when invoked without arguments or when something is unclear), gathers context into HANDOFF.md, and — after one confirmation gate — creates the workspace folder, terminal session (tmux session or herdr workspace — auto, or as requested), git worktrees (detached at the PR head for reviews), VS Code workspace and a Claude Code or pi session. Bootstrap only; the work itself is rpc-do-task. Never destructive.
 ---
 
 # rpc-handoff-task
 
 Set up everything needed to work on a task in isolation, write down what is
-known about it, and leave a fresh agent session waiting in tmux. This skill
+known about it, and leave a fresh agent session waiting in tmux or herdr. This skill
 **only ensures the assets exist and captures context**; the work happens in
 `rpc-do-task`, and the cleanup in `rpc-wrapup-task`.
 
@@ -25,6 +25,8 @@ sentence in Spanish or English:
 - `/rpc-handoff-task mira este page https://dd.enterprise.slack.com/archives/C0…/p1784…`
 - `/rpc-handoff-task https://app.datadoghq.com/incidents/57516`
 - `/rpc-handoff-task C07ABCDE123` (incident channel)
+- `/rpc-handoff-task SDCD-2541 en herdr` (or `--mux herdr` / `--mux tmux`: forces the
+  backend, from anywhere — tmux, herdr or a plain shell; CONVENTIONS §4 *Multiplexer*)
 
 **Without arguments**, ask (structured question tool) what to work on:
 
@@ -158,10 +160,12 @@ normally `ddoghq`).
   its folder name wins. Otherwise derive `<short-desc>` and the `TASK_SLUG`.
 - For each asset, check whether it exists:
   - folder: `test -d "$HOME/w/<TASK_SLUG>"`; manifest: `test -f …/HANDOFF.md`
-  - tmux: `tmux has-session -t "=w/<TASK_SLUG>" 2>/dev/null`; if alive, is an
-    agent already running in **any** of its windows?
-    `tmux list-panes -s -t "=w/<TASK_SLUG>" -F '#{window_index}.#{pane_index} #{pane_current_command}'`
-    (an agent shows up as `claude`, `pi` or `node`; a free pane as `zsh`/`bash`)
+  - terminal session: choose the backend `<M>` (CONVENTIONS §4 *Multiplexer*),
+    then `mux status --label "w/<TASK_SLUG>"`. It reports **both** backends:
+    is an agent already running in either? (tmux: `.tmux.panes[]` with
+    `claude: true` or `command` `pi`/`node`; herdr: any `.herdr.agents[]`).
+    If the session exists only in the *other* backend, say so in the plan and
+    offer: reuse it there, or (tmux → herdr) `mux replicate "w/<TASK_SLUG>"`.
   - worktrees: `git -C "$HOME/dd/<repo>" worktree list --porcelain` (compare
     with `realpath`) — right branch/ref?
   - branch: `git -C "$HOME/dd/<repo>" rev-parse --verify --quiet refs/heads/<branch>`
@@ -185,8 +189,8 @@ then the **Action plan** (CONVENTIONS §6) with one row per asset, e.g.:
 | 3 | Fetch PR head             | `refs/pr-review/59188` in `dd-source`                | create   | yes        |
 | 4 | Worktree (detached, no hooks) | `$HOME/dd/pr-review-dd-source-59188` @ `a1b2c3d` | create   | yes        |
 | 5 | VS Code workspace         | `…/pr-review-dd-source-59188.code-workspace`         | create   | yes        |
-| 6 | tmux session              | `w/pr-review-dd-source-59188`                        | reuse    | —          |
-| 7 | Agent session (Claude)    | `pr-review-dd-source-59188` in tmux                  | create   | yes        |
+| 6 | herdr workspace (auto)    | `w/pr-review-dd-source-59188`                        | create   | yes        |
+| 7 | Agent session (Claude)    | `pr-review-dd-source-59188` in herdr                 | create   | yes        |
 
 Ask in the same round (structured question tool): **Proceed / Adjust /
 Cancel**, and — if not obvious — the agent to launch: **Claude Code
@@ -198,11 +202,9 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
 2. **Captures**: save useful raw data under `context/` (e.g.
    `context/jira.md`, `context/pr.json`, `context/monitor.json`,
    `context/incident.json`, `context/slack-thread.md`).
-3. **tmux session** (detached, never kill or rename an existing one):
-   ```bash
-   tmux has-session -t "=w/<TASK_SLUG>" 2>/dev/null \
-     || tmux new-session -d -s "w/<TASK_SLUG>" -c "$HOME/w/<TASK_SLUG>"
-   ```
+3. **Terminal session** — created together with the agent in step 7 by
+   `mux open` (find-or-create; never kills or renames an existing one). If the
+   plan approved `mux replicate`, run it here.
 4. **Worktrees** — per repo, with the exact commands in CONVENTIONS §4:
    - work types: `fetch origin <main>`, then attach the existing branch, track
      it from `origin`, or create it `--no-track` from `origin/<main>`
@@ -245,17 +247,15 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
    fill empty fields, append to lists and to **Log** (a conflicting non-empty
    value → ask). Without front matter (legacy): prepend the front-matter block
    and append a `## Log` section; keep the existing body untouched.
-7. **Agent session** — only if no agent is already running in any window of
-   the tmux session (step 4). Target a pane by id: a free shell in a window
-   named `agent`, else a new `agent` window. Run it as **one** command (shell
-   variables don't survive between tool calls; a bare `=w/<TASK_SLUG>` is not a
-   valid pane target):
+7. **Agent session** — only if no agent is already running in the task's
+   terminal session, in either backend (step 4). One command creates the
+   session if needed and starts the agent (in tmux: a free shell in an `agent`
+   window, else a new `agent` window; in herdr: the new workspace's pane, else
+   a new `agent` tab). `<M>` is the backend approved in the plan:
    ```bash
-   P=$(tmux list-panes -s -t "=w/<TASK_SLUG>" -F '#{window_name} #{pane_current_command} #{pane_id}' \
-         | awk '$1=="agent" && ($2=="zsh"||$2=="bash") {print $3; exit}')
-   [ -n "$P" ] || P=$(tmux new-window -d -P -F '#{pane_id}' -t "=w/<TASK_SLUG>:" -n agent -c "$HOME/w/<TASK_SLUG>")
    # Claude Code (default) — one-line first message, no single quotes inside it
-   tmux send-keys -t "$P" 'cd "$HOME/w/<TASK_SLUG>" && claude --name "<TASK_SLUG>" "You are the dedicated session for task <TASK_SLUG> (<TASK_TYPE>). Read ./HANDOFF.md now. The environment is already bootstrapped: do not re-create assets. Reply with a 5-line summary of the task, then wait for my instructions. When I ask you to work on it, use the rpc-do-task skill."' Enter
+   mux open --mux <M> --label "w/<TASK_SLUG>" --cwd "$HOME/w/<TASK_SLUG>" \
+     --run 'cd "$HOME/w/<TASK_SLUG>" && claude --name "<TASK_SLUG>" "You are the dedicated session for task <TASK_SLUG> (<TASK_TYPE>). Read ./HANDOFF.md now. The environment is already bootstrapped: do not re-create assets. Reply with a 5-line summary of the task, then wait for my instructions. When I ask you to work on it, use the rpc-do-task skill."'
    ```
    For pi, the same with the launch command
    `cd "$HOME/w/<TASK_SLUG>" && pi --session-id "<TASK_SLUG>" --name "<TASK_SLUG>" "<same message>"`
@@ -263,7 +263,9 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
    If a Claude Code session named `<TASK_SLUG>` already exists for this folder
    (a `"customTitle":"<TASK_SLUG>"` match in
    `~/.claude/projects/<folder path with / and . replaced by ->/*.jsonl`),
-   resume it instead: `claude_session "$HOME/w/<TASK_SLUG>" "<TASK_SLUG>"`.
+   resume it instead: `--run 'claude_session "$HOME/w/<TASK_SLUG>" "<TASK_SLUG>"'`.
+   `skipped` in the output means an agent was already running: report it,
+   don't retry. Record the backend in the manifest (`mux: <M>`).
 
 ### 7. Report
 
@@ -271,7 +273,8 @@ A result table (created / reused / skipped / failed), plus:
 - the workspace file to open: `cursor "$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace"`
   (or `code`; for a cross-repository/fork PR recommend `code`, whose Workspace
   Trust opens untrusted code in Restricted Mode);
-- the tmux session to attach: `tmux attach -t "w/<TASK_SLUG>"`;
+- where the session lives: herdr — workspace `w/<TASK_SLUG>` (sidebar or the
+  `Alt+s` picker); tmux — `tmux attach -t "w/<TASK_SLUG>"`;
 - that the agent session `<TASK_SLUG>` (Claude Code or pi) is waiting for
   instructions, and that the work flow is `/rpc-do-task`.
 
@@ -292,4 +295,4 @@ in the manifest and a Log line. Don't launch another agent session.
 - **`rpc-do-task`** — do the work inside that environment (implement, review,
   investigate, fix).
 - **`rpc-wrapup-task`** — close the task: consistency/outcome review, JIRA or
-  follow-ups, cleanup of worktrees/branches/tmux.
+  follow-ups, cleanup of worktrees/branches/tmux/herdr.

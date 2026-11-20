@@ -1,12 +1,12 @@
 ---
 name: rpc-wrapup-task
-description: Close out tasks created by rpc-handoff-task once their outcome is final — JIRA/ad-hoc tasks with merged PRs, finished PR reviews, resolved Datadog pages and incidents. Reviews consistency and outcome per type (JIRA vs PR vs diff, review posted and PR state, follow-ups for pages/incidents), proposes JIRA updates/transitions and follow-ups, and cleans up worktrees, branches, review refs and tmux sessions. Targeted (any ID/URL/slug, or the current task folder) or discovery mode (no argument - scans all task workspaces and worktrees and shows which are ready). Every external or destructive action needs explicit per-action confirmation. Works even if the task's tmux or agent session is dead.
+description: Close out tasks created by rpc-handoff-task once their outcome is final — JIRA/ad-hoc tasks with merged PRs, finished PR reviews, resolved Datadog pages and incidents. Reviews consistency and outcome per type (JIRA vs PR vs diff, review posted and PR state, follow-ups for pages/incidents), proposes JIRA updates/transitions and follow-ups, and cleans up worktrees, branches, review refs and tmux sessions / herdr workspaces. Targeted (any ID/URL/slug, or the current task folder) or discovery mode (no argument - scans all task workspaces and worktrees and shows which are ready). Every external or destructive action needs explicit per-action confirmation. Works even if the task's tmux/herdr or agent session is dead.
 ---
 
 # rpc-wrapup-task
 
 Close tasks whose outcome is final. Runs in the **current session**; the
-task's tmux or agent session doesn't need to be alive.
+task's tmux/herdr or agent session doesn't need to be alive.
 
 **First, read `~/.claude/skills/rpc-handoff-task/CONVENTIONS.md`** (task
 types, naming, `HANDOFF.md`, interaction contract, harness notes).
@@ -35,7 +35,9 @@ types, naming, `HANDOFF.md`, interaction contract, harness notes).
 - **Only clean up what the task owns**: worktrees, branches and refs recorded
   in its `repos:` (or found by the legacy naming rules). Never the main
   checkout or another task's worktree.
-- **Dead tmux / agent sessions are not errors** — report "already gone".
+- **Dead tmux / herdr / agent sessions are not errors** — report "already gone".
+  A task can live in tmux, herdr or both (CONVENTIONS §4 *Multiplexer*): check
+  and clean both.
 - **Action table first, execute later**: nothing is executed until the user
   has approved it (CONVENTIONS §6: `destructive` ⛔ and `external` ⚠️ rows are
   confirmed per action; "all" shortcuts only when the user says so).
@@ -79,7 +81,7 @@ Per task:
 | Reviewed PR          | `pr-review`: `gh pr view <n> --repo <owner>/<repo> --json state,mergedAt,closedAt` + your review state (step 4) |
 | Page                 | `page`: current monitor state (Datadog MCP) |
 | Incident             | `incident`: current incident state (Datadog MCP) |
-| tmux                 | `tmux has-session -t "=w/<TASK_SLUG>" 2>/dev/null` → ALIVE / DEAD |
+| Session              | `mux status --label "w/<TASK_SLUG>"` → `tmux` / `herdr` / `both` / DEAD |
 
 ### DS-3. Classify
 
@@ -93,11 +95,11 @@ Per task:
 ### DS-4. Present and ask
 
 ```
-#  TASK_SLUG                              Type       Worktrees               PRs / state          tmux   Status
+#  TASK_SLUG                              Type       Worktrees               PRs / state          Session Status
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-1  SDCD-2545-cd-vis-worker-cc-enricher     jira       dd-source ✓ clean       #465140 merged       DEAD   🟢 ready
-2  pr-review-dd-source-59188               pr-review  dd-source ✓ detached    #59188 merged        DEAD   🟢 ready
-3  incident-57516-cc-enricher-killswitch   incident   dd-source ✓ clean       resolved · #1234 open ALIVE 🟡 partial
+1  SDCD-2545-cd-vis-worker-cc-enricher     jira       dd-source ✓ clean       #465140 merged       DEAD    🟢 ready
+2  pr-review-dd-source-59188               pr-review  dd-source ✓ detached    #59188 merged        herdr   🟢 ready
+3  incident-57516-cc-enricher-killswitch   incident   dd-source ✓ clean       resolved · #1234 open tmux 🟡 partial
 4  page-9540074-dora-intake-lag            page       —                       monitor ALERT        ALIVE  🔴 in progress
 ```
 
@@ -139,7 +141,7 @@ Asset                                              Status
 ──────────────────────────────────────────────────────────────────────────────
 Task  incident-57516-cc-enricher-killswitch         incident · HANDOFF.md ✓
 Incident 57516                                      resolved (SEV-2) · postmortem draft
-tmux  w/incident-57516-cc-enricher-killswitch       DEAD
+Session  w/incident-57516-cc-enricher-killswitch    DEAD (tmux, herdr)
 Agent session  incident-57516-cc-enricher-killswitch resumable (claude_session / pi --session-id)
 Worktree  $HOME/dd/dd-source-incident-57516-…        EXISTS — clean · 2 ignored files (.env.local, notes/)
 Local branch  raul.perezclavero/NO-TICKET-incident-… EXISTS in dd-source (tip == PR head)
@@ -164,8 +166,8 @@ Checks per worktree and branch:
   PR's `headRefOid`; if they differ, show both directions:
   `log --oneline <headRefOid>..<branch>` (local-only commits) and
   `log --oneline <branch>..<headRefOid>` (e.g. GitHub "Update branch" commits);
-- tmux: alive/dead, and what runs in it:
-  `tmux list-panes -s -t "=w/<TASK_SLUG>" -F '#{window_index}.#{pane_index} #{pane_current_command} #{pane_current_path}'`.
+- terminal session, in both backends: `mux status --label "w/<TASK_SLUG>"` —
+  tmux panes (`command`, `cwd`, `claude`) and herdr panes (`cwd`) plus agents.
 
 ### 4. Outcome review (per type)
 
@@ -218,7 +220,8 @@ file-level diff stat
 6   Delete local branch <repos[].branch> in <repo>      destructive ⛔  git branch -d
 7   Delete review ref  refs/pr-review/<n> in <repo>     destructive ⛔  git update-ref -d
 8   Mark task done in HANDOFF.md                        modify          status: done + wrap-up summary
-9   Kill tmux session  w/<TASK_SLUG>                    destructive ⛔  tmux kill-session [only if ALIVE; panes listed]
+9   Kill tmux session  w/<TASK_SLUG>                    destructive ⛔  mux close --mux tmux [only if it exists; panes listed]
+10  Close herdr workspace  w/<TASK_SLUG>                destructive ⛔  mux close --mux herdr [only if it exists; panes/agents listed]
 ```
 
 Include only the rows that apply to the task type. Show a clear warning for
@@ -244,7 +247,7 @@ in the right thread/channel). Record links in `HANDOFF.md`.
    `realpath "$PWD"` with `realpath "<wt>"` as a prefix), don't remove it from
    this session: finish the other actions, then tell the user to run
    `git -C "$HOME/dd/<repo>" worktree remove "<wt>"` (and the approved branch
-   deletion) after exiting. Also warn if a tmux pane's `pane_current_path`
+   deletion) after exiting. Also warn if a tmux or herdr pane's cwd
    (step 3) is inside `<wt>`. Otherwise re-run the step-3 checks. Skip and
    report if there are uncommitted changes. Ignored files beyond build/dependency output, or
    unreachable commits in a detached worktree → remove only after a separate
@@ -265,12 +268,16 @@ Set `status: done` in the front matter and append a **Wrap-up** section to
 prepend a minimal front matter (with `status: done`) and append the Wrap-up
 section; never rewrite the existing body.
 
-#### 6f. tmux (if approved and ALIVE) — always last
-If this agent runs inside that session
-(`[ -n "$TMUX" ] && [ "$(tmux display-message -p -t "$TMUX_PANE" '#S')" = "w/<TASK_SLUG>" ]`),
-don't kill it: finish the report, then tell the user to run
-`tmux kill-session -t "=w/<TASK_SLUG>"` after exiting. Otherwise
-`tmux kill-session -t "=w/<TASK_SLUG>"`. Already dead → "session already gone".
+#### 6f. Terminal sessions (if approved and existing) — always last
+For each backend where the session exists (step 3), check whether this agent
+runs inside it:
+- tmux: `[ -n "$TMUX" ] && [ "$(tmux display-message -p -t "$TMUX_PANE" '#S')" = "w/<TASK_SLUG>" ]`
+- herdr: `[ "${HERDR_ENV:-}" = 1 ] && [ "$HERDR_WORKSPACE_ID" = "$(mux status --label "w/<TASK_SLUG>" | jq -r .herdr.workspace_id)" ]`
+
+If it does, don't close that one: finish the report, then tell the user to run
+`mux close --mux <tmux|herdr> --label "w/<TASK_SLUG>"` after exiting.
+Otherwise `mux close --mux <tmux|herdr> --label "w/<TASK_SLUG>"`. Not found →
+"session already gone".
 
 ### 7. Final report
 
@@ -283,7 +290,8 @@ Worktree dd-source-… removed        ✓ done
 Branch deleted (dd-source)          skipped (user declined)
 Review ref deleted                  n/a
 HANDOFF.md                          status: done
-tmux session                        kill it after exiting (this agent runs in it)
+tmux session                        ✓ killed
+herdr workspace                     close it after exiting (this agent runs in it)
 Workspace folder                    kept at $HOME/w/<TASK_SLUG>
 ```
 
@@ -291,7 +299,7 @@ Call out anything skipped or failed and suggest next steps.
 
 ## Session recovery note
 
-A dead tmux session (e.g. after a restart) is expected. To look at the task's
+A dead tmux session or herdr workspace (e.g. after a restart) is expected. To look at the task's
 agent session before wrapping up (optional):
 - Claude Code: `claude_session "$HOME/w/<TASK_SLUG>" "<TASK_SLUG>"` (or
   `claude --resume` and pick it);

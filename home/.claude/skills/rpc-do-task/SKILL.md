@@ -6,7 +6,7 @@ description: Do the work of a task inside the environment bootstrapped by rpc-ha
 # rpc-do-task
 
 Do the actual work of a task whose environment already exists. Environment
-setup (folder, tmux, worktrees, agent session, `HANDOFF.md`) is owned by
+setup (folder, tmux session or herdr workspace, worktrees, agent session, `HANDOFF.md`) is owned by
 **`rpc-handoff-task`**; closing the task is **`rpc-wrapup-task`**.
 
 **First, read `~/.claude/skills/rpc-handoff-task/CONVENTIONS.md`** (task
@@ -121,4 +121,4 @@ follow-ups/JIRA and clean up the environment.
   waiting agent session. Bootstrap only.
 - **`rpc-do-task`** (this skill) — do the work inside that environment.
 - **`rpc-wrapup-task`** — close the task: outcome/consistency review, JIRA and
-  follow-ups, worktree/branch/tmux cleanup.
+  follow-ups, worktree/branch/tmux/herdr cleanup.

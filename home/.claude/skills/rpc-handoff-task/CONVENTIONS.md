@@ -135,7 +135,7 @@ Derived assets — identical for every type unless noted:
 | Manifest               | `$HOME/w/<TASK_SLUG>/HANDOFF.md` (§5)                                      |
 | Raw context captures   | `$HOME/w/<TASK_SLUG>/context/`                                             |
 | Working notes          | `$HOME/w/<TASK_SLUG>/NOTES.md` (investigations) · `REVIEW.md` (PR reviews) |
-| tmux session           | `w/<TASK_SLUG>`                                                            |
+| Terminal session       | `w/<TASK_SLUG>` — tmux session or herdr workspace label (§4 *Multiplexer*) |
 | Agent session name     | `<TASK_SLUG>` (Claude Code or pi, §7)                                      |
 | VS Code workspace      | `$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace`                           |
 | Worktree (work types)  | `$HOME/dd/<repo>-<TASK_SLUG>` — one per repo                               |
@@ -254,6 +254,33 @@ never rewrite the existing body. That is a *modify* action (§6).
 - **Go / Bazel / diffs**: follow the global `CLAUDE.md` rules (`go fmt`, Bazel
   `:all`, Gazelle, `running-bzl` agent, `code --diff`/`cursor --diff`).
 
+### Multiplexer (tmux or herdr)
+
+The task's terminal session lives in **tmux** (session `w/<TASK_SLUG>`) or in
+**herdr** (workspace labelled `w/<TASK_SLUG>`). Both are driven through
+`mux` (`~/.local/bin/mux`), so the skills never call tmux/herdr directly:
+
+| Need                          | Command (prints JSON)                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------- |
+| Which backend applies         | `mux backend [--mux tmux\|herdr]` → `tmux` / `herdr`                            |
+| Where the session exists      | `mux status --label "w/<TASK_SLUG>"` → `.tmux.exists`, `.herdr.exists`, panes, agents (`.tmux.panes[].claude`, `.herdr.agents[]`) |
+| Find-or-create + start agent  | `mux open --mux <M> --label "w/<TASK_SLUG>" --cwd "$HOME/w/<TASK_SLUG>" --run '<launch command>'` → `created`, `ran`, `pane_id`, or `skipped` when an agent already runs there |
+| Close                         | `mux close --mux tmux\|herdr\|both --label "w/<TASK_SLUG>"` → `closed: [...]`  |
+
+**Choosing the backend** (`<M>`), first match wins:
+1. explicit request in the prompt ("en herdr", "in tmux", `--mux herdr`);
+2. the manifest's `mux:` field for an existing task;
+3. `$MUX` if set (`tmux` / `herdr`);
+4. `auto`: `mux backend` — tmux inside tmux, herdr inside herdr, otherwise
+   `$MUX_PREFERRED` (default `herdr`).
+
+Show the chosen backend in the plan gate. A task may exist in **both** (e.g.
+started in tmux, copied to herdr with `mux replicate`): `status` reports both,
+an agent running in either counts as "agent already running", and wrap-up
+cleans both. `mux replicate w/<TASK_SLUG>` copies a tmux session into herdr,
+moving its Claude session (stopped in tmux, resumed in herdr); it is a
+`create` row and leaves the tmux session alive.
+
 ### Commits, branches and PRs
 
 - Commit message: one line, `<type>(<service>): <short description>`
@@ -294,6 +321,7 @@ task_slug: pr-review-dd-source-59188
 title: "Add retry to DORA intake client"
 status: active                  # active | done
 agent: claude                   # claude | pi
+mux: herdr                      # tmux | herdr — where w/<TASK_SLUG> lives (§4)
 created: 2026-09-29
 sources:                        # every URL/ID the task came from
   - https://github.com/ddoghq/dd-source/pull/59188
@@ -333,7 +361,7 @@ state transitions, incident timeline, Slack thread highlights, code pointers>
 ## Open questions
 ## Suggested angles / next steps
 ## Environment
-<table: TASK_SLUG, folder, tmux, agent session, worktrees, branches/refs, base
+<table: TASK_SLUG, folder, terminal session (tmux/herdr), agent session, worktrees, branches/refs, base
 commit, related worktrees owned by other tasks>
 
 ## What to do
@@ -385,13 +413,13 @@ proposal as many times as needed.
    | - | ------ | ------ | ---- | ---------- |
 
    `Kind` is one of:
-   - `create` — new local asset (folder, worktree, branch, tmux, file);
+   - `create` — new local asset (folder, worktree, branch, tmux session / herdr workspace, file);
    - `modify` — change to existing local state (code edits, config);
    - `external` ⚠️ — visible to others: GitHub (comments, reviews, pushes, PRs,
      labels), Slack messages, JIRA (create/edit/transition/comment), Datadog
      (monitors, incidents, notebooks), Confluence;
    - `destructive` ⛔ — deletes or discards something: worktree removal, branch
-     or ref deletion, killing a tmux session, overwriting files.
+     or ref deletion, killing a tmux session or closing a herdr workspace, overwriting files.
 
    Then ask **Proceed / Adjust / Cancel**. On *Adjust*, revise and show the
    plan again. Code edits inside the task's own worktree that follow an
