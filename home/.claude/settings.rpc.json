@@ -18,5 +18,6 @@
     "go-code-reviewer@datadog-claude-plugins": true,
     "playwright@claude-plugins-official": true
   },
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "editorMode": "vim"
 }
