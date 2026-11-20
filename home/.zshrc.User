@@ -91,6 +91,21 @@ bindkey -M emacs '\es' sesh-sessions
 bindkey -M vicmd '\es' sesh-sessions
 bindkey -M viins '\es' sesh-sessions
 
+# Alt+k: herdr command palette (`mux palette`)
+function mux-palette() {
+  {
+    exec </dev/tty
+    exec <&1
+    mux palette
+    zle reset-prompt > /dev/null 2>&1 || true
+  }
+}
+
+zle     -N             mux-palette
+bindkey -M emacs '\ek' mux-palette
+bindkey -M vicmd '\ek' mux-palette
+bindkey -M viins '\ek' mux-palette
+
 ## Auto-launch the picker on a new terminal, but never inside a multiplexer:
 ## herdr panes do not set $TMUX, so without the HERDR_ENV guard every new herdr
 ## pane would jump into tmux and hide its agents from herdr.

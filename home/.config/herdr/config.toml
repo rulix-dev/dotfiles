@@ -23,6 +23,14 @@ description = "session picker (mux)"
 width = "80%"
 height = "70%"
 
+[[keys.command]]
+key = "prefix+space"
+type = "popup"
+command = "$HOME/.local/bin/mux palette"
+description = "command palette (mux)"
+width = "70%"
+height = "60%"
+
 [ui]
 # Wider sidebar so long workspace labels (w/SDCT-...) fit. Defaults: 26 / 18 / 36.
 sidebar_width = 44

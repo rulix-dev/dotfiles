@@ -9,6 +9,7 @@
   mux status --label L               where L exists, in both backends (JSON out)
   mux close --label L [--mux M]      close the tmux session / herdr workspace
   mux backend [--mux M]              print the backend that would be used
+  mux palette                        command palette for herdr (type, Enter runs)
 
 Backend choice: an explicit --mux (or $MUX) wins; otherwise tmux inside tmux,
 herdr inside herdr, and $MUX_PREFERRED (default herdr) anywhere else.
@@ -692,6 +693,195 @@ def close_session(which, label):
     return {"label": label, "closed": closed}
 
 
+# --------------------------------------------------------------------------- palette
+
+# Client-only herdr actions: not in the API, so the palette can only remind the key.
+UI_KEYS = [
+    ("Goto picker (agents and terminals)", "prefix+g"),
+    ("Navigate workspaces in the sidebar", "prefix+w"),
+    ("Next / previous agent", "prefix+a / prefix+shift+a"),
+    ("Toggle sidebar", "prefix+b"),
+    ("Copy mode", "prefix+["),
+    ("Settings", "prefix+s"),
+    ("Keybinding help", "prefix+?"),
+    ("Detach client", "prefix+q"),
+]
+RPC_WORKSPACE = "rpc"  # where palette-launched rpc-* sessions run, cwd ~/w
+
+
+def herdr_context():
+    """Active workspace/tab/pane/cwd: popup env, then pane env, then focus."""
+    env = os.environ
+    ctx = {"ws": env.get("HERDR_ACTIVE_WORKSPACE_ID") or env.get("HERDR_WORKSPACE_ID"),
+           "tab": env.get("HERDR_ACTIVE_TAB_ID") or env.get("HERDR_TAB_ID"),
+           "pane": env.get("HERDR_ACTIVE_PANE_ID") or env.get("HERDR_PANE_ID"),
+           "cwd": env.get("HERDR_ACTIVE_PANE_CWD")}
+    if not (ctx["ws"] and ctx["tab"] and ctx["pane"]):
+        snap = herdr("api", "snapshot").get("snapshot", {})
+        ctx["ws"] = ctx["ws"] or snap.get("focused_workspace_id")
+        ctx["tab"] = ctx["tab"] or snap.get("focused_tab_id")
+        ctx["pane"] = ctx["pane"] or snap.get("focused_pane_id")
+    if not ctx["cwd"] and ctx["pane"]:
+        pane = herdr("pane", "get", ctx["pane"], check=False).get("pane", {})
+        ctx["cwd"] = pane.get("foreground_cwd") or pane.get("cwd")
+    ctx["cwd"] = ctx["cwd"] if ctx["cwd"] and os.path.isdir(ctx["cwd"]) else HOME
+    w = next((w for w in herdr_workspaces() if w["workspace_id"] == ctx["ws"]), None)
+    ctx["label"] = w["label"] if w else ""
+    return ctx
+
+
+def confirm(text):
+    return (prompt(f"{text} [y/N] ") or "").lower() in ("y", "yes", "s", "si", "sí")
+
+
+def fzf_choose(lines, label):
+    choice = fzf(lines, ["--height", "100%", "--reverse", "--ansi", "--border", "--border-label", f" {label} ",
+                         "--delimiter", "\t", "--with-nth", "1", "--prompt", "› "])
+    return choice.split("\t", 1)[1] if "\t" in choice else None
+
+
+def palette_entries(ctx):
+    sec = lambda name: f"{C['dim']}{name:<9}{C['off']}"
+    e = []
+    add = lambda section, title, action, hint="": e.append(
+        f"{sec(section)} {title}{('  ' + C['dim'] + hint + C['off']) if hint else ''}\t{action}")
+
+    add("task", "New task… (rpc-handoff-task)", "rpc:handoff", "ticket, PR/page/incident URL or a sentence")
+    slug = ctx["label"][2:] if ctx["label"].startswith("w/") else ""
+    add("task", f"Wrap up {slug or 'tasks…'} (rpc-wrapup-task)", "rpc:wrapup", "" if slug else "discovery mode")
+
+    add("space", "Switch / open workspace… (picker)", "ws:pick")
+    add("space", "New workspace (GoT name)", "ws:new")
+    add("space", "New workspace in a directory…", "ws:dir")
+    add("space", f"Rename workspace {ctx['label']}…", "ws:rename")
+    add("space", f"Close workspace {ctx['label']}", "ws:close", "kills its panes")
+    add("agent", "Go to agent…", "agent:goto")
+    add("tab", "New tab here", "tab:new", tilde(ctx["cwd"]))
+    add("tab", "Rename tab…", "tab:rename")
+    add("tab", "Close tab", "tab:close", "kills its panes")
+    add("pane", "Split right", "pane:split:right", tilde(ctx["cwd"]))
+    add("pane", "Split down", "pane:split:down", tilde(ctx["cwd"]))
+    add("pane", "Toggle zoom", "pane:zoom")
+    add("pane", "Rename pane…", "pane:rename")
+    add("pane", "Close pane", "pane:close")
+    if tmux_sessions():
+        add("tmux", "Move a tmux session to herdr…", "tmux:replicate")
+    for a in herdr("plugin", "action", "list", check=False).get("actions", []):
+        add("plugin", a["title"], f"plugin:{a['plugin_id']}.{a['action_id']}")
+    add("config", "Reload herdr config", "config:reload")
+    for title, key in UI_KEYS:
+        add("keys", title, f"key:{key}", key)
+    return e
+
+
+def palette():
+    herdr_ensure_server()
+    ctx = herdr_context()
+    choice = fzf(palette_entries(ctx), [
+        "--height", "100%" if os.environ.get("HERDR_ENV") != "1" else "60%",
+        "--reverse", "--ansi", "--border", "--border-label", " herdr commands ", "--prompt", "❯ ",
+        "--delimiter", "\t", "--with-nth", "1", "--header", f"  {ctx['label']}  ·  {tilde(ctx['cwd'])}",
+    ])
+    if not choice:
+        return  # Esc
+    run_palette_action(choice.split("\t", 1)[1], ctx)
+
+
+def rpc_launch(kind, skill_args):
+    """Start a Claude session running an rpc-* skill in a new tab of the `rpc` workspace."""
+    w = herdr_find(herdr_workspaces(), label=RPC_WORKSPACE)
+    cwd = os.path.join(HOME, "w") if os.path.isdir(os.path.join(HOME, "w")) else HOME
+    if w:
+        res = herdr("tab", "create", "--workspace", w["workspace_id"], "--cwd", cwd, "--label", kind, "--no-focus")
+        ws_id, pane_id, tab_id = w["workspace_id"], res["root_pane"]["pane_id"], res["tab"]["tab_id"]
+    else:
+        ws_id, pane_id, tab_id = herdr_create(cwd, RPC_WORKSPACE)
+        herdr("tab", "rename", tab_id, kind, check=False)
+    skill = {"handoff": "rpc-handoff-task", "wrapup": "rpc-wrapup-task"}[kind]
+    message = f"/{skill} {skill_args}".strip()
+    name = f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}"
+    herdr_run(pane_id, f"claude --name {shlex.quote(name)} {shlex.quote(message)}")
+    herdr("workspace", "focus", ws_id)
+    herdr("tab", "focus", tab_id, check=False)
+
+
+def run_palette_action(action, ctx):
+    kind, _, arg = action.partition(":")
+    attach = not in_herdr()
+    if action == "rpc:handoff":
+        task = prompt("Task (ticket, PR/page/incident URL or a sentence): ")
+        if task:
+            # The palette lives in herdr, so the task's session goes to herdr too.
+            rpc_launch("handoff", f"{task} --mux herdr")
+    elif action == "rpc:wrapup":
+        rpc_launch("wrapup", ctx["label"][2:] if ctx["label"].startswith("w/") else "")
+    elif action == "ws:pick":
+        pick_herdr()
+    elif action == "ws:new":
+        ws_id, _, _ = herdr_create(HOME, unique_label(ask_name(), herdr_workspaces()), focus=True)
+        herdr_focus(ws_id, attach)
+    elif action == "ws:dir":
+        key = fzf_choose(list_herdr("dirs") + list_herdr("find"), "directory")
+        if key:
+            d = key.split(":", 1)[1]
+            ws = herdr_workspaces()
+            existing = herdr_find(ws, cwd=d)
+            ws_id = existing["workspace_id"] if existing else herdr_create(
+                d, unique_label(os.path.basename(d.rstrip("/")) or "~", ws), focus=True)[0]
+            herdr_focus(ws_id, attach)
+    elif action == "ws:rename":
+        label = prompt(f"New name for {ctx['label']}: ")
+        if label:
+            herdr("workspace", "rename", ctx["ws"], label)
+    elif action == "ws:close":
+        if confirm(f"Close workspace {ctx['label']} and everything running in it?"):
+            herdr("workspace", "close", ctx["ws"])
+    elif action == "agent:goto":
+        workspaces = herdr_workspaces()
+        agents = [a for w in workspaces for a in w["agents"] if a.get("agent")]
+        labels = {w["workspace_id"]: w["label"] for w in workspaces}
+        lines = []
+        for a in agents:
+            color, icon = STATUS_STYLE.get(a.get("agent_status"), ("dim", "·"))
+            lines.append(f"{C[color]}{icon}{C['off']} {a['agent']}  {labels.get(a['workspace_id'], '')}  "
+                         f"{C['dim']}{tilde(a.get('foreground_cwd') or a.get('cwd'))}{C['off']}\t{a['pane_id']}")
+        pane = fzf_choose(lines, "agents")
+        if pane:
+            herdr("agent", "focus", pane)
+    elif action == "tab:new":
+        herdr("tab", "create", "--workspace", ctx["ws"], "--cwd", ctx["cwd"], "--focus")
+    elif action == "tab:rename":
+        label = prompt("New tab name: ")
+        if label:
+            herdr("tab", "rename", ctx["tab"], label)
+    elif action == "tab:close":
+        if confirm("Close this tab and everything running in it?"):
+            herdr("tab", "close", ctx["tab"])
+    elif kind == "pane" and arg.startswith("split:"):
+        herdr("pane", "split", ctx["pane"], "--direction", arg.split(":")[1], "--cwd", ctx["cwd"], "--focus")
+    elif action == "pane:zoom":
+        herdr("pane", "zoom", ctx["pane"], "--toggle")
+    elif action == "pane:rename":
+        label = prompt("New pane name (empty clears it): ")
+        herdr("pane", "rename", ctx["pane"], *([label] if label else ["--clear"]))
+    elif action == "pane:close":
+        if confirm("Close this pane?"):
+            herdr("pane", "close", ctx["pane"])
+    elif action == "tmux:replicate":
+        key = fzf_choose(list_herdr("tmux"), "tmux → herdr")
+        if key:
+            ws_id = replicate_session(key.split(":", 1)[1], assume_yes=False, force=False, dry_run=False)
+            if ws_id:
+                herdr_focus(ws_id, attach)
+            prompt("Press Enter to close… ")
+    elif kind == "plugin":
+        herdr("plugin", "action", "invoke", arg)
+    elif action == "config:reload":
+        herdr("server", "reload-config")
+    elif kind == "key":
+        prompt(f"Not available from here: press {arg} in herdr. Enter to close… ")
+
+
 # --------------------------------------------------------------------------- main
 
 def main():
@@ -716,6 +906,7 @@ def main():
     p = sub.add_parser("close")
     p.add_argument("--mux", default="both")
     p.add_argument("--label", required=True)
+    sub.add_parser("palette")
     p = sub.add_parser("backend")
     p.add_argument("--mux")
     p = sub.add_parser("_list")
@@ -743,6 +934,8 @@ def main():
             print(json.dumps(status(a.label)))
         elif a.cmd == "close":
             print(json.dumps(close_session(a.mux, a.label)))
+        elif a.cmd == "palette":
+            palette()
         elif a.cmd == "backend":
             print(backend(a.mux))
         elif a.cmd == "_list":
