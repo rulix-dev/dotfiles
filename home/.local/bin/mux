@@ -28,6 +28,13 @@ import time
 from pathlib import Path
 
 HOME = str(Path.home())
+
+# Popups started by the herdr server inherit the server's PATH, which may miss
+# user tool dirs (fzf in ~/.fzf/bin, sesh in ~/go/bin, Homebrew on macOS).
+for _d in ("~/.local/bin", "~/.fzf/bin", "~/go/bin", "/opt/homebrew/bin", "/usr/local/bin"):
+    _d = os.path.expanduser(_d)
+    if os.path.isdir(_d) and _d not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + _d
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 NAMES_FILE = CONFIG / "mux-picker" / "got-names.txt"
 CLAUDE_SESSIONS = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "sessions"
@@ -948,7 +955,19 @@ def main():
             kill(a.key)
     except MuxError as e:
         print(f"mux: {e}", file=sys.stderr)
+        pause_if_popup()
         sys.exit(1)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        pause_if_popup()
+        sys.exit(1)
+
+
+def pause_if_popup():
+    """A herdr popup closes when its command exits: keep errors on screen."""
+    if in_herdr() and os.environ.get("HERDR_ENV") != "1":
+        prompt("Press Enter to close… ")
 
 
 if __name__ == "__main__":
