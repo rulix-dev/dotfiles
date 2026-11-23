@@ -1,0 +1,20 @@
+# Agent session stores (Claude projects + file history, pi sessions) between
+# Datadog workspaces. The Mac only relays them (~/.ws-sync/*): workspace paths
+# are /home/bits/..., so these sessions can't run on the Mac anyway.
+# Roots are passed by w-sync.
+#
+# Rule: resume a session on another workspace only after closing it where it
+# ran. Session files grow with every message; if two machines write the same
+# one, the newer copy wins and the other is kept as a conflict copy.
+batch = true
+auto = true
+prefer = newer
+copyonconflict = true
+times = true
+perms = 0
+rsrc = false
+fastcheck = true
+sshargs = -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=20
+
+ignore = Name .DS_Store
+ignore = Name ._*

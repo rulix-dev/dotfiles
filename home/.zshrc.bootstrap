@@ -111,6 +111,11 @@ __rulix_dev_zsh_setup() {
     # Pi coding agent, configured like Claude (Datadog tooling: work machine only)
     __rulix_dev_is_work && __rulix_dev_pi_setup
 
+    # ~/w sync with the Datadog workspaces (Unison, Mac as the hub): work Mac only
+    if __rulix_dev_is_work && [[ "$(__rulix_dev_os)" == macos ]]; then
+      "$HOME/.local/bin/w-sync" install || echo "WARN: w-sync install failed, re-run 'w-sync install'" >&2
+    fi
+
     # Create file to avoid setup next time
     touch "${HOME}/.zshrc.setup"
 }
@@ -149,6 +154,10 @@ __rulix_dev_merge_claude_settings() {
   fi
 
   __rulix_dev_merge_json "$base" "$overlay" || return 1
+
+  # Datadog marketplace (ddoghq, over HTTPS: the ssh key may be a personal
+  # account) and its plugins: work machines only, the repo is private
+  __rulix_dev_is_work && { __rulix_dev_merge_json "$base" "$HOME/.claude/settings.rpc.work.json" || return 1; }
 
   __rulix_dev_claude_mcp_sync
 }

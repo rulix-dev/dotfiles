@@ -1,0 +1,136 @@
+#!/bin/sh
+# w-sync: two-way sync of ~/w and of the agent session stores between the Mac
+# and the user's Datadog workspaces, with Unison over plain ssh. The Mac is the
+# hub: every run syncs it with each running workspace in turn, so a change on
+# one workspace reaches the others on the next run.
+#
+#   Mac ~/w                      <-> workspace ~/w                 (profile w)
+#   Mac ~/.ws-sync/claude-projects     <-> workspace ~/.claude/projects     (w-sessions)
+#   Mac ~/.ws-sync/claude-file-history <-> workspace ~/.claude/file-history (w-sessions)
+#   Mac ~/.ws-sync/pi-sessions         <-> workspace ~/.pi/agent/sessions   (w-sessions)
+#
+# Session stores only relay through the Mac (workspace paths are /home/bits/...,
+# so those sessions can't run here); the Mac's own ~/.claude is never touched.
+#
+# Usage:
+#   w-sync run                 one pass over every PROVISIONED workspace
+#   w-sync install             LaunchAgent: run every 2 minutes (macOS)
+#   w-sync uninstall           remove the LaunchAgent
+#   w-sync status              LaunchAgent state + last log lines
+#
+# Unison 2.52+ (the Mac's, from brew) can't talk to 2.51 or older. Workspaces
+# on Ubuntu 24.04 get a compatible 2.53 from apt (installed on first sync);
+# older Ubuntu 22.04 workspaces only have 2.51 and are skipped with a message:
+# recreate them to get the newer image.
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/dogbrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+STATE="$HOME/.ws-sync"
+LOG="$STATE/w-sync.log"
+LABEL=com.rulix-dev.w-sync
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+SSH="ssh -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=20"
+
+# <local root> <remote root, relative to the workspace home> <profile>
+PAIRS="$HOME/w|w|w
+$STATE/claude-projects|.claude/projects|w-sessions
+$STATE/claude-file-history|.claude/file-history|w-sessions
+$STATE/pi-sessions|.pi/agent/sessions|w-sessions"
+
+log() { echo "$(date '+%F %T') $*"; }
+
+local_version() { unison -version 2>/dev/null | awk '{print $3}'; }
+
+# PROVISIONED only: the workspaces ssh config resumes a paused one on connect.
+running_workspaces() {
+  workspaces list --no-color 2>/dev/null |
+    awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "STATUS") col = i; next }
+         col && $col == "PROVISIONED" { print $1 }'
+}
+
+# Make sure workspace $1 has a Unison that speaks the Mac's protocol (2.52+):
+# install it from apt when missing. Prints its path for -servercmd.
+compatible() { case "$1" in 2.5[2-9]*|2.[6-9]*|[3-9]*) return 0 ;; *) return 1 ;; esac; }
+ensure_remote_unison() {
+  ws=$1
+  probe='p=$(command -v unison) && echo "$p $(unison -version | cut -d" " -f3)"'
+  info=$($SSH "workspace-$ws" "$probe" </dev/null 2>/dev/null)
+  if [ -z "$info" ]; then
+    $SSH "workspace-$ws" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unison" </dev/null >/dev/null 2>&1
+    info=$($SSH "workspace-$ws" "$probe" </dev/null 2>/dev/null)
+    [ -n "$info" ] && log "$ws: installed Unison ${info#* } from apt" >&2
+  fi
+  [ -n "$info" ] || { log "$ws: no Unison and apt couldn't install it" >&2; return 1; }
+  if ! compatible "${info#* }"; then
+    log "$ws: Unison ${info#* } there can't talk to $(local_version) here (old Ubuntu 22.04 image?): recreate the workspace" >&2
+    return 1
+  fi
+  echo "${info% *}"
+}
+
+sync_workspace() {
+  ws=$1
+  servercmd=$(ensure_remote_unison "$ws") || { log "$ws: skipped"; return 1; }
+  # Remote roots must exist (a new workspace has no ~/w or pi sessions yet)
+  dirs=$(echo "$PAIRS" | cut -d'|' -f2 | tr '\n' ' ')
+  $SSH "workspace-$ws" "mkdir -p $dirs" </dev/null >/dev/null 2>&1
+  echo "$PAIRS" | while IFS='|' read -r lroot rroot profile; do
+    mkdir -p "$lroot"
+    if unison "$profile" "$lroot" "ssh://workspace-$ws/$rroot" -servercmd "$servercmd" -terse </dev/null >"$STATE/last-$ws-$profile.out" 2>&1; then
+      log "$ws: $rroot ok"
+    else
+      log "$ws: $rroot FAILED (see $STATE/last-$ws-$profile.out)"; tail -3 "$STATE/last-$ws-$profile.out" | sed "s/^/    /"
+    fi
+  done
+}
+
+cmd_run() {
+  mkdir -p "$STATE"
+  # One run at a time (launchd doesn't overlap a job, but a manual run could)
+  if ! mkdir "$STATE/lock" 2>/dev/null; then
+    if [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then rmdir "$STATE/lock"; mkdir "$STATE/lock"; else exit 0; fi
+  fi
+  trap 'rmdir "$STATE/lock" 2>/dev/null' EXIT INT TERM
+  [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 2000000 ] && mv "$LOG" "$LOG.1"
+  {
+    command -v unison >/dev/null || { log "unison not installed (brew install unison)"; exit 1; }
+    for ws in $(running_workspaces); do sync_workspace "$ws"; done
+  } >>"$LOG" 2>&1
+}
+
+cmd_install() {
+  [ "$(uname)" = Darwin ] || { echo "w-sync install is for the Mac (the hub)" >&2; exit 1; }
+  command -v unison >/dev/null || brew install unison || exit 1
+  mkdir -p "$STATE" "$HOME/Library/LaunchAgents"
+  rm -f "$PLIST"
+  plutil -create xml1 "$PLIST"
+  plutil -insert Label -string "$LABEL" "$PLIST"
+  plutil -insert ProgramArguments -array "$PLIST"
+  plutil -insert ProgramArguments -string /bin/sh -append "$PLIST"
+  plutil -insert ProgramArguments -string "$HOME/.local/bin/w-sync" -append "$PLIST"
+  plutil -insert ProgramArguments -string run -append "$PLIST"
+  plutil -insert StartInterval -integer 120 "$PLIST"
+  plutil -insert RunAtLoad -bool true "$PLIST"
+  plutil -insert StandardOutPath -string "$STATE/launchd.log" "$PLIST"
+  plutil -insert StandardErrorPath -string "$STATE/launchd.log" "$PLIST"
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "Installed: syncs every 2 minutes. Log: $LOG"
+}
+
+cmd_uninstall() {
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  rm -f "$PLIST" && echo "Removed $LABEL (synced data is left in place)"
+}
+
+cmd_status() {
+  launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -E '^\s*(state|last exit code|run interval)' || echo "LaunchAgent not loaded"
+  echo "Unison here: $(local_version)"
+  [ -f "$LOG" ] && tail -n 20 "$LOG"
+}
+
+case "${1:-}" in
+  run) cmd_run ;;
+  install) cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  status) cmd_status ;;
+  *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

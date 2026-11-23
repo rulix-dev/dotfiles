@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Move a task folder under ~/w and keep its agent sessions resumable.
+
+Claude Code and pi file their sessions by working directory, so moving a task
+folder (e.g. ~/w/tasks/<slug> -> ~/w/archive/<YYYY>/<MM>/<slug>) hides them
+from `claude --resume` / `pi --resume` unless their session folders move too:
+
+  Claude  ~/.claude/projects/<cwd, every non-alphanumeric char as "-">/
+  pi      ~/.pi/agent/sessions/--<cwd without leading "/", "/" as "-">--/
+          (and the "cwd" in the header line of each session file)
+
+It also rewrites references to the old path in the folder's own *.md and
+*.code-workspace files (HANDOFF.md, NOTES.md, ...), and recomputes the
+relative folder paths of *.code-workspace files that point outside the task
+(e.g. its worktrees in ~/dd).
+
+It refuses to move a folder that a live agent (claude / pi / codex) has as its
+working directory: that agent would keep writing to the old session folder.
+
+Usage:
+  w-move-task [--dry-run] <src-dir> <dst-dir>
+  w-move-task [--dry-run] --sessions-only <old-path> <new-path>
+      (the folder was already moved by hand: only move the sessions)
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+CLAUDE = os.path.join(HOME, ".claude", "projects")
+PI = os.path.join(HOME, ".pi", "agent", "sessions")
+AGENTS = {"claude", "pi", "codex"}
+# Home directories that show up in paths written on other machines
+OTHER_HOMES = ["/home/bits", "/Users/raul.perezclavero"]
+
+dry = False
+
+
+def say(msg):
+    print(("[dry-run] " if dry else "") + msg)
+
+
+def claude_dir(path):
+    return os.path.join(CLAUDE, re.sub(r"[^A-Za-z0-9]", "-", path))
+
+
+def pi_dir(path):
+    return os.path.join(PI, "--" + path.strip("/").replace("/", "-") + "--")
+
+
+def live_agents(path):
+    """Agent processes whose cwd is path or below it."""
+    found = []
+    if os.path.isdir("/proc"):
+        for pid in filter(str.isdigit, os.listdir("/proc")):
+            try:
+                cwd = os.readlink(f"/proc/{pid}/cwd")
+                argv = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+                comm = open(f"/proc/{pid}/comm").read().strip()
+            except OSError:
+                continue
+            name = os.path.basename(argv[0].decode(errors="replace")) if argv and argv[0] else comm
+            is_agent = comm in AGENTS or name in AGENTS or "/claude/versions/" in argv[0].decode(errors="replace")
+            if is_agent and (cwd == path or cwd.startswith(path + "/")):
+                found.append(f"{pid} {name}")
+    else:  # macOS
+        out = subprocess.run(["lsof", "-a", "-d", "cwd", "-F", "pcn"], capture_output=True, text=True).stdout
+        pid = comm = None
+        for line in out.splitlines():
+            tag, val = line[:1], line[1:]
+            if tag == "p":
+                pid = val
+            elif tag == "c":
+                comm = val
+            elif tag == "n" and comm and (comm in AGENTS or comm.startswith("claude")):
+                if val == path or val.startswith(path + "/"):
+                    found.append(f"{pid} {comm}")
+    return found
+
+
+def move_session_dir(src, dst, label):
+    if not os.path.isdir(src):
+        return False
+    if os.path.exists(dst):
+        # Both exist (e.g. a session was started at the new path already):
+        # merge the files, never overwrite one.
+        for name in os.listdir(src):
+            if os.path.exists(os.path.join(dst, name)):
+                say(f"  {label}: {name} already in {dst}, left in {src}")
+                continue
+            if not dry:
+                shutil.move(os.path.join(src, name), os.path.join(dst, name))
+        if not dry and not os.listdir(src):
+            os.rmdir(src)
+        say(f"  {label}: merged {src} -> {dst}")
+    else:
+        if not dry:
+            os.rename(src, dst)
+        say(f"  {label}: {os.path.basename(src)} -> {os.path.basename(dst)}")
+    return True
+
+
+def fix_pi_cwd(directory, old, new):
+    if not os.path.isdir(directory):
+        return
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith(".jsonl"):
+            continue
+        path = os.path.join(directory, name)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        nl = data.find(b"\n")
+        head = data[: nl if nl >= 0 else len(data)]
+        try:
+            header = json.loads(head)
+        except ValueError:
+            continue
+        if header.get("type") == "session" and header.get("cwd") == old:
+            header["cwd"] = new
+            if not dry:
+                with open(path, "wb") as fh:
+                    fh.write(json.dumps(header, separators=(",", ":")).encode() + (data[nl:] if nl >= 0 else b""))
+            say(f"  pi: header cwd updated in {name}")
+
+
+def move_sessions(old, new):
+    moved = move_session_dir(claude_dir(old), claude_dir(new), "claude")
+    if move_session_dir(pi_dir(old), pi_dir(new), "pi"):
+        fix_pi_cwd(pi_dir(new) if not dry else pi_dir(old), old, new)
+        moved = True
+    if not moved:
+        say("  no Claude/pi sessions for this folder")
+
+
+def rewrite_refs(folder, old, new):
+    """Old path -> new path in the folder's own notes and workspace files."""
+    if not old.startswith(HOME + "/"):
+        return
+    rel_old, rel_new = old[len(HOME) + 1 :], new[len(HOME) + 1 :]
+    prefixes = ["$HOME/", "~/", HOME + "/"] + [h + "/" for h in OTHER_HOMES if h != HOME]
+    rx = re.compile("(" + "|".join(map(re.escape, prefixes)) + ")" + re.escape(rel_old) + r"(?![A-Za-z0-9_.-])")
+    for root, _, files in os.walk(folder):
+        for name in files:
+            if not (name.endswith(".md") or name.endswith(".code-workspace")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+            text2, n = rx.subn(lambda m: m.group(1) + rel_new, text)
+            if n:
+                if not dry:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text2)
+                say(f"  refs: {n} path(s) updated in {os.path.relpath(path, folder)}")
+
+
+def fix_workspace_paths(folder, old, new):
+    """Relative folders[].path in *.code-workspace files that point outside the
+    task folder (e.g. "../../../dd/<repo>-<slug>") break when the folder moves
+    to another depth: recompute them from the new location."""
+    rx = re.compile(r'("path"\s*:\s*")([^"]+)(")')
+    for root, _, files in os.walk(folder):
+        for name in files:
+            if not name.endswith(".code-workspace"):
+                continue
+            path = os.path.join(root, name)
+            rel_dir = os.path.relpath(root, folder)
+            old_dir = os.path.normpath(os.path.join(old, rel_dir))
+            new_dir = os.path.normpath(os.path.join(new, rel_dir))
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+
+            def repl(m):
+                p = m.group(2)
+                if os.path.isabs(p) or p.startswith("$") or p.startswith("~"):
+                    return m.group(0)
+                target = os.path.normpath(os.path.join(old_dir, p))
+                if target == old or target.startswith(old + "/"):
+                    return m.group(0)  # inside the task folder: moved along
+                return m.group(1) + os.path.relpath(target, new_dir) + m.group(3)
+
+            text2 = rx.sub(repl, text)
+            if text2 != text:
+                if not dry:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text2)
+                say(f"  workspace: relative paths recomputed in {os.path.relpath(path, folder)}")
+
+
+def main(argv):
+    global dry
+    args = [a for a in argv if a != "--dry-run"]
+    dry = len(args) != len(argv)
+    sessions_only = "--sessions-only" in args
+    args = [a for a in args if a != "--sessions-only"]
+    if len(args) != 2 or any(a.startswith("-") for a in args):
+        print(__doc__.split("Usage:")[1].rstrip(), file=sys.stderr)
+        return 2
+    src, dst = (os.path.abspath(os.path.expanduser(a)).rstrip("/") for a in args)
+
+    if sessions_only:
+        if os.path.exists(src):
+            print(f"error: {src} still exists: move the folder first (or drop --sessions-only)", file=sys.stderr)
+            return 1
+        if not os.path.isdir(dst):
+            print(f"error: {dst} is not a folder", file=sys.stderr)
+            return 1
+        say(f"SESSIONS {src} -> {dst}")
+        move_sessions(src, dst)
+        return 0
+
+    if not os.path.isdir(src):
+        print(f"error: {src} is not a folder", file=sys.stderr)
+        return 1
+    if os.path.exists(dst):
+        print(f"error: {dst} already exists", file=sys.stderr)
+        return 1
+    live = live_agents(os.path.realpath(src))
+    if live:
+        print(f"error: live agent(s) working in {src}; close them first:\n  " + "\n  ".join(live), file=sys.stderr)
+        return 1
+
+    say(f"MOVE {src} -> {dst}")
+    if not dry:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        os.rename(src, dst)
+    move_sessions(src, dst)
+    rewrite_refs(dst if not dry else src, src, dst)
+    fix_workspace_paths(dst if not dry else src, src, dst)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

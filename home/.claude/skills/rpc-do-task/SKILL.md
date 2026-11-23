@@ -23,11 +23,12 @@ Resolution order:
 
 1. **Argument given** → classify it (CONVENTIONS §2), then resolve the existing
    task (CONVENTIONS §3 *Resolving an existing task*).
-2. **No argument, cwd inside a task** (`$HOME/w/<TASK_SLUG>/…` or a worktree
+2. **No argument, cwd inside a task** (`<TASK_DIR>/…` — `$HOME/w/tasks/<TASK_SLUG>`
+   or an archived `$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>` — or a worktree
    listed in a manifest) → that task. State which one you picked.
-3. **No argument, elsewhere** → list active tasks (`status: active` manifests
-   and legacy folders — no `HANDOFF.md`, or one without front matter — most
-   recently modified first) and ask which one (structured question tool; top 3
+3. **No argument, elsewhere** → list active tasks (folders under
+   `$HOME/w/tasks/`: `status: active` manifests and legacy folders — no
+   `HANDOFF.md`, or one without front matter — most recently modified first) and ask which one (structured question tool; top 3
    as options, free text for anything else).
 
 A PR link may be a task's own *work PR* rather than something to review —
@@ -35,6 +36,11 @@ check it as described in CONVENTIONS §2 *Work PRs*.
 
 If the task has **no environment yet**, stop and propose
 `/rpc-handoff-task <input>` first. Don't create assets ad hoc here.
+
+If the task is **archived** (`$HOME/w/archive/…`, `status: done`), say so and
+ask before working on it: reopening moves it back to `$HOME/w/tasks/` with
+`w-move-task` and sets `status: active` (CONVENTIONS §3 *Task folder
+lifecycle*) — a `modify` row in the plan gate.
 
 ## Step-by-step
 

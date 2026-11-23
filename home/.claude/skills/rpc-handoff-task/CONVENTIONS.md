@@ -88,8 +88,8 @@ is not JIRA, use `adhoc` with that key as `TASK_ID`.
 `git -C "$HOME/dd/<repo>" remote get-url origin` →
 `git@ddoghq.github.com:ddoghq/dd-go.git` → `ddoghq/dd-go`. No local clone →
 default to `ddoghq`, and ask when unsure. Always pass `--repo <owner>/<repo>`
-to `gh`: agent sessions run from `$HOME/w/<TASK_SLUG>`, which is not a git
-repo.
+to `gh`: agent sessions run from the task folder (`$HOME/w/tasks/<TASK_SLUG>`),
+which is not a git repo.
 
 **PR numbers did not move with the repos**: ddoghq repos restarted their
 numbering and the old org can't be queried, so a pasted
@@ -131,13 +131,14 @@ Derived assets — identical for every type unless noted:
 
 | Asset                  | Value                                                                      |
 | ---------------------- | -------------------------------------------------------------------------- |
-| Workspace folder       | `$HOME/w/<TASK_SLUG>`                                                      |
-| Manifest               | `$HOME/w/<TASK_SLUG>/HANDOFF.md` (§5)                                      |
-| Raw context captures   | `$HOME/w/<TASK_SLUG>/context/`                                             |
-| Working notes          | `$HOME/w/<TASK_SLUG>/NOTES.md` (investigations) · `REVIEW.md` (PR reviews) |
+| Workspace folder (`<TASK_DIR>`) | `$HOME/w/tasks/<TASK_SLUG>` while active; `$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>` once wrapped up (§3 *Task folder lifecycle*) |
+| Manifest               | `<TASK_DIR>/HANDOFF.md` (§5)                                               |
+| Raw context captures   | `<TASK_DIR>/context/`                                                      |
+| Working notes          | `<TASK_DIR>/NOTES.md` (investigations) · `REVIEW.md` (PR reviews)          |
+| Vault note             | `$HOME/w/notes/01_Projects/Tasks/<TASK_SLUG>.md` while active; `$HOME/w/notes/04_Archive/Tasks/<YYYY>/<MM>/<TASK_SLUG>.md` once wrapped up (§8) |
 | Terminal session       | `w/<TASK_SLUG>` — tmux session or herdr workspace label (§4 *Multiplexer*) |
 | Agent session name     | `<TASK_SLUG>` (Claude Code or pi, §7)                                      |
-| VS Code workspace      | `$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace`                           |
+| VS Code workspace      | `<TASK_DIR>/<TASK_SLUG>.code-workspace`                                    |
 | Worktree (work types)  | `$HOME/dd/<repo>-<TASK_SLUG>` — one per repo                               |
 | Worktree (`pr-review`) | `$HOME/dd/<TASK_SLUG>` — the slug already contains the repo                |
 | Branch (`jira`, `adhoc`) | `raul.perezclavero/<TASK_SLUG>`, new, from the tip of `origin/<main>`    |
@@ -150,6 +151,37 @@ clear; repos can be added later (see `rpc-handoff-task` → *Add a repo to an
 existing task*). The branch actually used is always recorded in the manifest
 (`repos[].branch`) — read it from there instead of recomputing it.
 
+### Task folder lifecycle (`$HOME/w`)
+
+`$HOME/w` has the same layout on the Mac and on every Datadog workspace, kept
+in sync by `w-sync` (Unison over ssh, the Mac as hub):
+
+| Folder                                   | Holds                                                     |
+| ---------------------------------------- | --------------------------------------------------------- |
+| `$HOME/w/tasks/<TASK_SLUG>`              | tasks in progress — `rpc-handoff-task` creates them here  |
+| `$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>` | finished tasks, filed by the month they were wrapped up  |
+| `$HOME/w/notes`                          | the Obsidian work vault (§8)                              |
+
+- **Only `rpc-wrapup-task` archives a task**, and only once its outcome is
+  final: `tasks/<TASK_SLUG>` → `archive/<YYYY>/<MM>/<TASK_SLUG>` with
+  `<YYYY>/<MM>` = the wrap-up date.
+- **Move task folders only with `w-move-task <src> <dst>`**
+  (`~/.local/bin`, from the dotfiles), never with `mv`: Claude Code and pi file
+  their sessions by working directory, and `w-move-task` moves those session
+  folders too (so `claude --resume` / `pi --resume` keep working from the new
+  path) and rewrites the old path in the folder's own `*.md` /
+  `*.code-workspace`. It refuses while an agent runs in the folder — close
+  that session first, or hand the command to the user to run after `/exit`
+  when it is the current session.
+- **Reopening an archived task** (more work after the wrap-up) is the
+  reverse move, `archive/<YYYY>/<MM>/<TASK_SLUG>` → `tasks/<TASK_SLUG>`, plus
+  `status: active` again: a `modify` row in the plan gate (§6).
+- **Never put repos, worktrees, dependencies or binaries under `$HOME/w`**:
+  worktrees live in `$HOME/dd` (§3 table). Everything in `$HOME/w` is synced to
+  the Mac and to every workspace.
+- `<TASK_DIR>` in these skills is the task's **actual** folder as found by the
+  lookup below (`tasks/…` or `archive/…`): use it, never rebuild the path.
+
 ### Resolving an existing task
 
 Look up by every identifier you extracted (`TASK_ID`, ticket key, PR, monitor
@@ -157,25 +189,33 @@ id, page number, incident id, pasted URL), in this order. Use `find`, not
 `ls` with globs: the shell is often zsh, where a glob that matches nothing
 aborts the whole command.
 
+Both lookups search active tasks (`$HOME/w/tasks/<TASK_SLUG>`) and archived
+ones (`$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>`):
+
 1. Manifests (front-matter fields and list items; tolerates trailing `# …`
    comments, and a numeric ID must follow a separator so `59188` doesn't match
    `#159188`):
    ```bash
-   find "$HOME/w" -mindepth 2 -maxdepth 2 -name HANDOFF.md -exec grep -l -E \
-     '^(task_id|task_slug|jira|pr|monitor_id|page_number|incident_id): *"?<ID>"?( +#.*)? *$|^ *(- |branch: |worktree: )"?([^ ]*[/#=:-])?<ID>"?( +#.*)? *$' {} +
+   { find "$HOME/w/tasks" -mindepth 2 -maxdepth 2 -name HANDOFF.md
+     find "$HOME/w/archive" -mindepth 4 -maxdepth 4 -name HANDOFF.md; } 2>/dev/null |
+     xargs grep -l -E \
+     '^(task_id|task_slug|jira|pr|monitor_id|page_number|incident_id): *"?<ID>"?( +#.*)? *$|^ *(- |branch: |worktree: )"?([^ ]*[/#=:-])?<ID>"?( +#.*)? *$'
    ```
    Escape ERE metacharacters in `<ID>` (`.`, `?`, `+`) when it is a pasted
    URL, or search by the IDs extracted from it.
 2. Folder names:
    ```bash
-   find "$HOME/w" -mindepth 1 -maxdepth 1 -type d \( -name '*<ID>' -o -name '*<ID>-*' \)
+   { find "$HOME/w/tasks" -mindepth 1 -maxdepth 1 -type d \( -name '*<ID>' -o -name '*<ID>-*' \)
+     find "$HOME/w/archive" -mindepth 3 -maxdepth 3 -type d \( -name '*<ID>' -o -name '*<ID>-*' \); } 2>/dev/null
    ```
    (the `-*` form keeps `SDCD-123` from matching `SDCD-1234`).
 
 An existing folder's name **wins** over a freshly derived slug. More than one
 match (e.g. `SDCD-2992-g1-spark-validation` and `SDCD-2992-otel-ai-impact-scope`)
-→ ask which one. From inside a task (cwd under `$HOME/w/<TASK_SLUG>` or inside
-a worktree listed in a manifest), that task is the default.
+→ ask which one. From inside a task (cwd under `<TASK_DIR>` or inside a
+worktree listed in a manifest), that task is the default. A match under
+`archive/` is a **finished** task: say so, and only work on it again after
+the user agrees to reopen it (§3 *Task folder lifecycle*).
 
 **Legacy workspaces** — created by the old `rpc-*-jira-task` skills — have
 either no `HANDOFF.md` or a `HANDOFF.md` **without front matter** (its first
@@ -264,7 +304,7 @@ The task's terminal session lives in **tmux** (session `w/<TASK_SLUG>`) or in
 | ----------------------------- | ------------------------------------------------------------------------------- |
 | Which backend applies         | `mux backend [--mux tmux\|herdr]` → `tmux` / `herdr`                            |
 | Where the session exists      | `mux status --label "w/<TASK_SLUG>"` → `.tmux.exists`, `.herdr.exists`, panes, agents (`.tmux.panes[].claude`, `.herdr.agents[]`) |
-| Find-or-create + start agent  | `mux open --mux <M> --label "w/<TASK_SLUG>" --cwd "$HOME/w/<TASK_SLUG>" --run '<launch command>'` → `created`, `ran`, `pane_id`, or `skipped` when an agent already runs there |
+| Find-or-create + start agent  | `mux open --mux <M> --label "w/<TASK_SLUG>" --cwd "<TASK_DIR>" --run '<launch command>'` → `created`, `ran`, `pane_id`, or `skipped` when an agent already runs there |
 | Close                         | `mux close --mux tmux\|herdr\|both --label "w/<TASK_SLUG>"` → `closed: [...]`  |
 
 **Choosing the backend** (`<M>`), first match wins:
@@ -333,6 +373,7 @@ page_number: 9540074            # page only (On-Call "Page #N"), if any
 monitor_id: 294586644           # page (and incidents triggered by a monitor)
 monitor_group: "datacenter:us1.prod.dog,service:foo"   # triggering group, if known
 incident_id: 57516              # incident only (IR-57516)
+vault_note: $HOME/w/notes/01_Projects/Tasks/pr-review-dd-source-59188.md   # §8; moves on wrap-up
 slack:                          # page/incident: where the conversation lives
   channel: C0123456789
   thread_ts: "1784126564.295089"
@@ -380,8 +421,9 @@ Rules:
   `prs`, `repos`) and changing `status`. **Never silently change a non-empty
   value** — a conflicting value means ask.
 - `rpc-do-task` appends key decisions/results to **Log** and keeps `repos:` and
-  `prs:` current; `rpc-wrapup-task` sets `status: done` and appends the
-  wrap-up summary.
+  `prs:` current; `rpc-wrapup-task` sets `status: done`, appends the wrap-up
+  summary, writes the final vault note (§8) and archives the folder (§3).
+  `status` and location must agree: `active` ↔ `tasks/`, `done` ↔ `archive/`.
 
 ---
 
@@ -394,7 +436,7 @@ proposal as many times as needed.
 1. **Parse first.** With arguments, infer everything you can (§2) and resolve
    it with read-only calls before asking anything.
 2. **No arguments → ask**, except `rpc-do-task` run from inside a task (cwd
-   under `$HOME/w/<TASK_SLUG>` or a manifest worktree): it uses that task and
+   under `<TASK_DIR>` or a manifest worktree): it uses that task and
    says so. Otherwise present the options with the structured question tool
    (§7): task type and identifier, or — for `do`/`wrapup` — the discovered
    existing tasks (recommended option first; the current task, if any, is the
@@ -439,7 +481,9 @@ proposal as many times as needed.
    `update_datadog_incident`, the On-Call paging API — it only has write
    endpoints —, Slack send/reaction tools). **Never ever**: `--force` worktree
    removal, `git reset --hard`, `git stash`, `git checkout -- <file>`,
-   `rm -rf` of task assets, deleting `$HOME/w/<TASK_SLUG>`, switching the
+   `rm -rf` of task assets, deleting `<TASK_DIR>` (moving it to `archive/`
+   with `w-move-task` is the wrap-up's job, not a deletion; a plain `mv`
+   strands the task's agent sessions), switching the
    global kubectl context (`kubectl config use-context`/`set-context` — pass
    `--context` instead), executing production-changing operations (rollbacks,
    scaling, restarts, feature-flag flips) — propose them for the human to run.
@@ -462,12 +506,17 @@ do, then use the local name:
 | Subagents                 | `Agent` tool (e.g. `pr-review-toolkit:*` agents)     | `subagent` tool (`pi-subagents`; call `subagents_enable` first), giving it the Claude agent's definition file as instructions. Bridged `/<plugin>:agent:<name>` prompt templates can only be typed by the user |
 | Invoke a skill            | `/<skill> <args>`                                    | `/skill:<skill> <args>` (args are appended; no `$ARGUMENTS`)       |
 | Start a session           | `claude --name "<TASK_SLUG>" "<first message>"`      | `pi --session-id "<TASK_SLUG>" --name "<TASK_SLUG>" "<first message>"` |
-| Resume it                 | `claude_session "$HOME/w/<TASK_SLUG>" "<TASK_SLUG>"` | `cd "$HOME/w/<TASK_SLUG>" && pi --session-id "<TASK_SLUG>"` (sessions are per directory) |
+| Resume it                 | `claude_session "<TASK_DIR>" "<TASK_SLUG>"`          | `cd "<TASK_DIR>" && pi --session-id "<TASK_SLUG>"` (sessions are per directory) |
 
 If no structured-question tool is available, print numbered options and wait.
-Launch agent sessions from the workspace folder `$HOME/w/<TASK_SLUG>`, not from
-a repo: a repo-level `.mcp.json` overrides same-named MCP servers (e.g. the
-Atlassian OAuth "issuer mismatch" in pi).
+Launch agent sessions from the task folder `<TASK_DIR>`, not from a repo: a
+repo-level `.mcp.json` overrides same-named MCP servers (e.g. the Atlassian
+OAuth "issuer mismatch" in pi).
+
+Sessions are synced between Datadog workspaces (`w-sync`, same `/home/bits`
+paths), so a task's session can be resumed on another workspace — but only
+after it was closed where it ran (two machines writing one session file split
+it into a conflict copy). Sessions started on the Mac stay on the Mac.
 
 Claude plugin definitions live under each plugin's `installPath`
 (`jq -r '.plugins["<plugin>@<marketplace>"][0].installPath' ~/.claude/plugins/installed_plugins.json`),
@@ -485,3 +534,74 @@ defaulting to US1. For the Datadog MCP, do its skill discovery first
 (`load_datadog_skill` + `list_datadog_skills`) as its server instructions
 require. When a tool is missing, say which toolset provides it and use the
 closest alternative.
+
+---
+
+## 8. Vault notes (Obsidian, `$HOME/w/notes`)
+
+`$HOME/w/notes` is the user's Obsidian work vault (`work-vault` plugin). It
+keeps **one short note per task**, with settled facts only — the back-and-forth
+stays in `<TASK_DIR>` (`HANDOFF.md` Log, `NOTES.md`, `context/`).
+
+- If `$HOME/w/notes` doesn't exist (vault not set up on this machine yet),
+  skip the vault note and say so; never create the vault from these skills.
+- Write in the user's language (Spanish unless the vault's
+  `06_Metadata/Claude/CLAUDE.md` says otherwise). No secrets, customer names,
+  org IDs or ticket bodies: links and high-level summaries only.
+- Paths outside the vault can't be Obsidian links: write `<TASK_DIR>` as
+  inline code.
+- Writing or rewriting the task's own vault note is a scratch write (§6.4) for
+  `rpc-handoff-task` and `rpc-wrapup-task`; every other vault file belongs to
+  the user and the `work-vault` skills — don't touch them.
+
+**While active** — `rpc-handoff-task` creates
+`$HOME/w/notes/01_Projects/Tasks/<TASK_SLUG>.md` (a few lines; it is a card,
+not a log):
+
+```markdown
+---
+task: <TASK_SLUG>
+type: <TASK_TYPE>
+status: active
+created: <YYYY-MM-DD>
+tags: [task, task/<TASK_TYPE>]
+---
+# <TASK_ID> — <title>
+
+- **Qué:** <one line: what was asked>
+- **Enlaces:** <JIRA / PR / page / incident / Slack links>
+- **Carpeta:** `<TASK_DIR>`
+- **Estado:** en curso
+```
+
+**Once wrapped up** — `rpc-wrapup-task` replaces it with the final note at
+`$HOME/w/notes/04_Archive/Tasks/<YYYY>/<MM>/<TASK_SLUG>.md` (same `<YYYY>/<MM>`
+as the archived folder) and removes the active card:
+
+```markdown
+---
+task: <TASK_SLUG>
+type: <TASK_TYPE>
+status: done            # done | abandoned | superseded
+created: <YYYY-MM-DD>
+closed: <YYYY-MM-DD>
+tags: [task, task/<TASK_TYPE>]
+---
+# <TASK_ID> — <title>
+
+## Qué se pidió
+<one or two lines>
+
+## Qué se hizo al final
+<the outcome as decided, not the path to it; if the plan changed, one line
+on why>
+
+## Resultado y decisiones
+- <PRs merged / review posted / root cause / mitigation, with links>
+
+## Follow-ups
+- <open items with links, or "Ninguno">
+
+Carpeta: `<archived TASK_DIR>`
+```
+

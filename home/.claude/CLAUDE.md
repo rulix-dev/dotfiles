@@ -9,6 +9,17 @@
     - The <short-desc> part should contain the jira ticket ID we are working on. If no context about any jira ticket, simply say NO-TICKET-... and the rest of the description a very very brief desc of the changes done.
 - Generally, avoid committing or pushing changes without explicit approval from user
 
+## Work folder `~/w`
+
+Same layout on the Mac and on every Datadog workspace, kept in sync by `w-sync` (Unison over ssh, the Mac as hub; never git, never a cloud folder):
+
+- `~/w/tasks/<TASK_SLUG>/` — tasks in progress (created by `rpc-handoff-task`).
+- `~/w/archive/<YYYY>/<MM>/<TASK_SLUG>/` — finished tasks. A task moves here **only** through `rpc-wrapup-task`, in the month it is wrapped up.
+- `~/w/notes/` — the Obsidian work vault (`work-vault` plugin): short, settled notes; one note per task (`01_Projects/Tasks/` while active, `04_Archive/Tasks/<YYYY>/<MM>/` once wrapped up).
+- Never put repos, worktrees, dependencies (`node_modules`, `.venv`), build output or other binaries in `~/w`: worktrees live in `~/dd`.
+- Move a task folder only with `w-move-task <src> <dst>` (it also moves its Claude/pi sessions so they stay resumable), and never while an agent is running in it.
+- Agent sessions sync between workspaces too: resume a session on another workspace only after closing it where it ran.
+
 ## Diffs
 
 When running inside a VSCode/Cursor terminal (or any IDE with a `code` or `cursor` CLI available), show diffs visually using `code --diff` or `cursor --diff` instead of plain text in the terminal.

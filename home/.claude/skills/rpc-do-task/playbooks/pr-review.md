@@ -47,7 +47,7 @@ Give the user a map before they read:
   ```
 - **Where to look first**: the riskiest hunks (concurrency, error handling,
   data migrations, API/contract changes, security-sensitive code, missing tests).
-- **How to open it**: `cursor "$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace"`
+- **How to open it**: `cursor "<TASK_DIR>/<TASK_SLUG>.code-workspace"`
   (or `code`; for a cross-repository PR prefer `code`, whose Workspace Trust
   keeps untrusted code in Restricted Mode). Jump to a location with
   `code -g "$WT/<path>:<line>"` / `cursor -g …`. Per-file diff:
@@ -125,7 +125,7 @@ Before posting:
 - keep internal context out: check `gh repo view <owner>/<repo> --json visibility`
   (CONVENTIONS §4 *Public repos*).
 
-Post by writing the payload to `$HOME/w/<TASK_SLUG>/context/review-payload.json`:
+Post by writing the payload to `<TASK_DIR>/context/review-payload.json`:
 
 ```json
 {
@@ -143,7 +143,7 @@ Post by writing the payload to `$HOME/w/<TASK_SLUG>/context/review-payload.json`
 
 ```bash
 gh api --method POST "repos/<owner>/<repo>/pulls/<n>/reviews" \
-  --input "$HOME/w/<TASK_SLUG>/context/review-payload.json"
+  --input "<TASK_DIR>/context/review-payload.json"
 ```
 
 Record the review id/URL and state under **Posted** in `REVIEW.md` and in the

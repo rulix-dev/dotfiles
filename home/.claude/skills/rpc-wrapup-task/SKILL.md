@@ -1,6 +1,6 @@
 ---
 name: rpc-wrapup-task
-description: Close out tasks created by rpc-handoff-task once their outcome is final — JIRA/ad-hoc tasks with merged PRs, finished PR reviews, resolved Datadog pages and incidents. Reviews consistency and outcome per type (JIRA vs PR vs diff, review posted and PR state, follow-ups for pages/incidents), proposes JIRA updates/transitions and follow-ups, and cleans up worktrees, branches, review refs and tmux sessions / herdr workspaces. Targeted (any ID/URL/slug, or the current task folder) or discovery mode (no argument - scans all task workspaces and worktrees and shows which are ready). Every external or destructive action needs explicit per-action confirmation. Works even if the task's tmux/herdr or agent session is dead.
+description: Close out tasks created by rpc-handoff-task once their outcome is final — JIRA/ad-hoc tasks with merged PRs, finished PR reviews, resolved Datadog pages and incidents. Reviews consistency and outcome per type (JIRA vs PR vs diff, review posted and PR state, follow-ups for pages/incidents), proposes JIRA updates/transitions and follow-ups, cleans up worktrees, branches, review refs and tmux sessions / herdr workspaces, writes the task's final note in the Obsidian vault (~/w/notes) and archives the task folder to ~/w/archive/<YYYY>/<MM>/ (with w-move-task, so its agent sessions stay resumable). Targeted (any ID/URL/slug, or the current task folder) or discovery mode (no argument - scans all task workspaces and worktrees and shows which are ready). Every external or destructive action needs explicit per-action confirmation. Works even if the task's tmux/herdr or agent session is dead.
 ---
 
 # rpc-wrapup-task
@@ -25,8 +25,12 @@ types, naming, `HANDOFF.md`, interaction contract, harness notes).
 
 ## Hard rules
 
-- **Never delete the workspace folder** `$HOME/w/<TASK_SLUG>` — it keeps
-  `HANDOFF.md`, notes and history.
+- **Never delete the task folder** `<TASK_DIR>` — it keeps `HANDOFF.md`,
+  notes and history. Wrapping up **archives** it instead:
+  `$HOME/w/tasks/<TASK_SLUG>` → `$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>`
+  (`<YYYY>/<MM>` = today), only with `w-move-task` and only once the outcome
+  is final (CONVENTIONS §3 *Task folder lifecycle*). This skill is the only
+  one that archives tasks.
 - **Never force**: no `git worktree remove --force`; `git branch -D` only after
   the checks in step 6d **and** a separate explicit confirmation.
 - **Never edit or transition JIRA, post to Slack/GitHub, or change Datadog**
@@ -50,12 +54,14 @@ types, naming, `HANDOFF.md`, interaction contract, harness notes).
 
 Use `find` (the shell may be zsh, where unmatched globs abort commands).
 
-1. **Manifests**:
-   `find "$HOME/w" -mindepth 2 -maxdepth 2 -name HANDOFF.md` — for each file
-   whose first line is `---`, read the front matter (`task_type`, `task_id`,
-   `status`, `repos:`, `pr`, `prs`, `jira`, …). Skip `status: done` unless it
-   still has worktrees left over.
-2. **Legacy tasks**: folders in `$HOME/w` whose `HANDOFF.md` is missing or has
+1. **Manifests** of active tasks:
+   `find "$HOME/w/tasks" -mindepth 2 -maxdepth 2 -name HANDOFF.md` — for each
+   file whose first line is `---`, read the front matter (`task_type`,
+   `task_id`, `status`, `repos:`, `pr`, `prs`, `jira`, …). A `status: done`
+   manifest still under `tasks/` was wrapped up but never archived: list it as
+   🟢 *ready to archive*. Archived tasks (`$HOME/w/archive/…`) are only listed
+   when they still have worktrees left over (step 3).
+2. **Legacy tasks**: folders in `$HOME/w/tasks` whose `HANDOFF.md` is missing or has
    no front matter, and whose names match the CONVENTIONS §3 legacy patterns
    (`<KEY>-<n>-…`, `incident-<n>-…`, `pr-review-<repo>-<n>`, `NO-TICKET-…`).
 3. **Orphan worktrees**: for each repo under `$HOME/dd/` with extra worktrees
@@ -220,8 +226,10 @@ file-level diff stat
 6   Delete local branch <repos[].branch> in <repo>      destructive ⛔  git branch -d
 7   Delete review ref  refs/pr-review/<n> in <repo>     destructive ⛔  git update-ref -d
 8   Mark task done in HANDOFF.md                        modify          status: done + wrap-up summary
-9   Kill tmux session  w/<TASK_SLUG>                    destructive ⛔  mux close --mux tmux [only if it exists; panes listed]
-10  Close herdr workspace  w/<TASK_SLUG>                destructive ⛔  mux close --mux herdr [only if it exists; panes/agents listed]
+9   Final vault note                                    modify          04_Archive/Tasks/<YYYY>/<MM>/<TASK_SLUG>.md [full draft shown]; active card removed
+10  Kill tmux session  w/<TASK_SLUG>                    destructive ⛔  mux close --mux tmux [only if it exists; panes listed]
+11  Close herdr workspace  w/<TASK_SLUG>                destructive ⛔  mux close --mux herdr [only if it exists; panes/agents listed]
+12  Archive task folder                                 modify          w-move-task → $HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG> [deferred if an agent — or this session — runs in it]
 ```
 
 Include only the rows that apply to the task type. Show a clear warning for
@@ -264,11 +272,23 @@ in the right thread/channel). Record links in `HANDOFF.md`.
 
 #### 6e. Manifest (if approved)
 Set `status: done` in the front matter and append a **Wrap-up** section to
-`HANDOFF.md`: date, outcome, PRs, tickets, what was cleaned up. Legacy task:
-prepend a minimal front matter (with `status: done`) and append the Wrap-up
-section; never rewrite the existing body.
+`HANDOFF.md`: date, outcome, PRs, tickets, what was cleaned up, and where the
+folder and the vault note are archived. Set `vault_note:` to the final note's
+path (6f). Legacy task: prepend a minimal front matter (with `status: done`)
+and append the Wrap-up section; never rewrite the existing body.
 
-#### 6f. Terminal sessions (if approved and existing) — always last
+#### 6f. Final vault note (if approved)
+If `$HOME/w/notes` exists: write
+`$HOME/w/notes/04_Archive/Tasks/<YYYY>/<MM>/<TASK_SLUG>.md` from the *Once
+wrapped up* template in CONVENTIONS §8, using the step-4 outcome review —
+**settled facts only**: what was asked, what was finally done (if the plan
+changed, one line on why), results and decisions with links, follow-ups. The
+reader wants the conclusion, not the history of the task. Show the full draft
+in the step-5 table and iterate on it like any other proposal. Then delete the
+active card `01_Projects/Tasks/<TASK_SLUG>.md` if it exists (it is this task's
+own note). No vault on this machine → skip and say so.
+
+#### 6g. Terminal sessions (if approved and existing)
 For each backend where the session exists (step 3), check whether this agent
 runs inside it:
 - tmux: `[ -n "$TMUX" ] && [ "$(tmux display-message -p -t "$TMUX_PANE" '#S')" = "w/<TASK_SLUG>" ]`
@@ -278,6 +298,27 @@ If it does, don't close that one: finish the report, then tell the user to run
 `mux close --mux <tmux|herdr> --label "w/<TASK_SLUG>"` after exiting.
 Otherwise `mux close --mux <tmux|herdr> --label "w/<TASK_SLUG>"`. Not found →
 "session already gone".
+
+#### 6h. Archive the task folder (if approved) — always last
+Only when the folder is still under `$HOME/w/tasks/`. Target:
+`$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>`, `<YYYY>/<MM>` = today.
+```bash
+w-move-task --dry-run "$HOME/w/tasks/<TASK_SLUG>" "$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>"
+w-move-task "$HOME/w/tasks/<TASK_SLUG>" "$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>"
+```
+It moves the folder, its Claude/pi session folders and the paths in its own
+`*.md`/`*.code-workspace`, and refuses while an agent runs in the folder:
+- **this agent's working directory is inside the folder** (compare
+  `realpath "$PWD"` with `realpath "$HOME/w/tasks/<TASK_SLUG>"` as a prefix),
+  or another agent still runs there (e.g. a session that 6g deferred) → don't
+  move it: finish the report, then give the user the exact commands to run
+  after `/exit` — `cd ~`, any deferred `mux close …`, then the `w-move-task`
+  line above — and how to resume the session afterwards
+  (`claude_session "$HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG>" "<TASK_SLUG>"`);
+- any other error → report and skip; never fall back to a plain `mv`.
+
+After the move, fix the archived paths written in 6e/6f if `w-move-task`
+didn't (it only rewrites files inside the moved folder).
 
 ### 7. Final report
 
@@ -290,9 +331,10 @@ Worktree dd-source-… removed        ✓ done
 Branch deleted (dd-source)          skipped (user declined)
 Review ref deleted                  n/a
 HANDOFF.md                          status: done
+Vault note                          ✓ 04_Archive/Tasks/<YYYY>/<MM>/<TASK_SLUG>.md
 tmux session                        ✓ killed
 herdr workspace                     close it after exiting (this agent runs in it)
-Workspace folder                    kept at $HOME/w/<TASK_SLUG>
+Task folder                         archived → $HOME/w/archive/<YYYY>/<MM>/<TASK_SLUG> (or: run w-move-task after exiting)
 ```
 
 Call out anything skipped or failed and suggest next steps.
@@ -301,13 +343,15 @@ Call out anything skipped or failed and suggest next steps.
 
 A dead tmux session or herdr workspace (e.g. after a restart) is expected. To look at the task's
 agent session before wrapping up (optional):
-- Claude Code: `claude_session "$HOME/w/<TASK_SLUG>" "<TASK_SLUG>"` (or
-  `claude --resume` and pick it);
-- pi: `cd "$HOME/w/<TASK_SLUG>" && pi --session-id "<TASK_SLUG>"`.
+- Claude Code: `claude_session "<TASK_DIR>" "<TASK_SLUG>"` (or
+  `claude --resume` from `<TASK_DIR>` and pick it);
+- pi: `cd "<TASK_DIR>" && pi --session-id "<TASK_SLUG>"`.
+
+This also works for archived tasks: `w-move-task` moved their sessions along.
 
 ## Relationship to the other rpc-* skills
 
 - **`rpc-handoff-task`** — bootstrap the environment and capture context.
 - **`rpc-do-task`** — do the work inside that environment.
 - **`rpc-wrapup-task`** (this skill) — close the loop: outcome review, JIRA and
-  follow-ups, cleanup.
+  follow-ups, cleanup, final vault note, archive.

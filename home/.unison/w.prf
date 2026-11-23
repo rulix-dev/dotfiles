@@ -1,0 +1,30 @@
+# ~/w (tasks/, archive/, notes/) <-> the same path on each Datadog workspace.
+# Roots are passed by w-sync. Never add a cloud folder or a git remote here:
+# work notes stay on the Mac and the user's own workspaces.
+batch = true
+auto = true
+# On a conflict the newer edit wins and the other version is kept next to it
+# as a conflict copy, so nothing is silently lost.
+prefer = newer
+copyonconflict = true
+times = true
+perms = 0
+rsrc = false
+fastcheck = true
+# Plain ssh only: no port forwards from the interactive config, never prompt.
+sshargs = -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=20
+
+ignore = Name .DS_Store
+ignore = Name ._*
+ignore = Name .trash
+ignore = Name .Trash
+# ~/w never holds repos, dependencies or build output (see ~/.claude/CLAUDE.md)
+ignore = Name .git
+ignore = Name node_modules
+ignore = Name .venv
+ignore = Name venv
+ignore = Name __pycache__
+ignore = Name *.bundle
+# Per-device Obsidian UI state (open tabs, pane layout)
+ignore = Path notes/.obsidian/workspace.json
+ignore = Path notes/.obsidian/workspace-mobile.json

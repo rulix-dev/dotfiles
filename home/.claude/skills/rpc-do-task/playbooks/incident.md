@@ -43,7 +43,7 @@ loop what changed.
   (`external` ⚠️).
 - **Postmortem input**: draft sections (summary, timeline, root cause,
   contributing factors, what went well/badly, action items) in
-  `$HOME/w/<TASK_SLUG>/POSTMORTEM.md`; publishing it anywhere is `external`.
+  `<TASK_DIR>/POSTMORTEM.md`; publishing it anywhere is `external`.
 - **Follow-up tickets**: draft each JIRA issue → create only after approval;
   link them in `HANDOFF.md`.
 - **Code fix**: add the repo (`rpc-handoff-task` → *Add a repo to an existing

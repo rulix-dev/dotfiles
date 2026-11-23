@@ -159,7 +159,9 @@ normally `ddoghq`).
 - Resolve an existing task first (CONVENTIONS §3 *Resolving an existing task*);
   its folder name wins. Otherwise derive `<short-desc>` and the `TASK_SLUG`.
 - For each asset, check whether it exists:
-  - folder: `test -d "$HOME/w/<TASK_SLUG>"`; manifest: `test -f …/HANDOFF.md`
+  - folder: `test -d "$HOME/w/tasks/<TASK_SLUG>"` (an archived match from the
+    lookup means a finished task: offer to reopen it, CONVENTIONS §3);
+    manifest: `test -f …/HANDOFF.md`; vault note (CONVENTIONS §8)
   - terminal session: choose the backend `<M>` (CONVENTIONS §4 *Multiplexer*),
     then `mux status --label "w/<TASK_SLUG>"`. It reports **both** backends:
     is an agent already running in either? (tmux: `.tmux.panes[]` with
@@ -184,13 +186,14 @@ then the **Action plan** (CONVENTIONS §6) with one row per asset, e.g.:
 
 | # | Action                    | Target                                               | Kind     | Reversible |
 | - | ------------------------- | ---------------------------------------------------- | -------- | ---------- |
-| 1 | Workspace folder          | `$HOME/w/pr-review-dd-source-59188`                  | create   | yes        |
-| 2 | HANDOFF.md + `context/`   | `$HOME/w/pr-review-dd-source-59188/`                 | create   | yes        |
+| 1 | Workspace folder          | `$HOME/w/tasks/pr-review-dd-source-59188`            | create   | yes        |
+| 2 | HANDOFF.md + `context/`   | `$HOME/w/tasks/pr-review-dd-source-59188/`           | create   | yes        |
 | 3 | Fetch PR head             | `refs/pr-review/59188` in `dd-source`                | create   | yes        |
 | 4 | Worktree (detached, no hooks) | `$HOME/dd/pr-review-dd-source-59188` @ `a1b2c3d` | create   | yes        |
 | 5 | VS Code workspace         | `…/pr-review-dd-source-59188.code-workspace`         | create   | yes        |
 | 6 | herdr workspace (auto)    | `w/pr-review-dd-source-59188`                        | create   | yes        |
 | 7 | Agent session (Claude)    | `pr-review-dd-source-59188` in herdr                 | create   | yes        |
+| 8 | Vault card                | `$HOME/w/notes/01_Projects/Tasks/pr-review-dd-source-59188.md` | create | yes |
 
 Ask in the same round (structured question tool): **Proceed / Adjust /
 Cancel**, and — if not obvious — the agent to launch: **Claude Code
@@ -198,7 +201,8 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
 
 ### 6. Execute (in this order, skipping what already exists)
 
-1. **Folder**: `mkdir -p "$HOME/w/<TASK_SLUG>/context"`.
+1. **Folder**: `mkdir -p "$HOME/w/tasks/<TASK_SLUG>/context"` — always under
+   `tasks/`; never clone repos or put binaries there (CONVENTIONS §3).
 2. **Captures**: save useful raw data under `context/` (e.g.
    `context/jira.md`, `context/pr.json`, `context/monitor.json`,
    `context/incident.json`, `context/slack-thread.md`).
@@ -215,7 +219,7 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
    - existing worktree path → reuse; verify its branch/ref matches, otherwise
      stop and ask;
    - any failure → stop and surface it; never work around it destructively.
-5. **VS Code workspace** `$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace`
+5. **VS Code workspace** `$HOME/w/tasks/<TASK_SLUG>/<TASK_SLUG>.code-workspace`
    (create, or add missing folders to an existing one). Use **relative paths**
    (VS Code doesn't expand `${env:HOME}` in `folders[].path`, but resolves
    paths relative to the file):
@@ -223,12 +227,13 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
    {
      "folders": [
        { "path": "." },
-       { "path": "../../dd/<repo>-<TASK_SLUG>" }
+       { "path": "../../../dd/<repo>-<TASK_SLUG>" }
      ],
      "settings": {}
    }
    ```
-   For `pr-review` the second entry is `../../dd/<TASK_SLUG>`.
+   For `pr-review` the second entry is `../../../dd/<TASK_SLUG>`. (`w-move-task`
+   recomputes these relative paths when the folder is archived.)
 6. **`HANDOFF.md`** following CONVENTIONS §5: front matter with every known
    field, then Summary, *Context gathered (verify it — don't trust it)*, Open
    questions, Suggested angles, Environment table, *What to do* ("Nothing yet —
@@ -254,23 +259,28 @@ Cancel**, and — if not obvious — the agent to launch: **Claude Code
    a new `agent` tab). `<M>` is the backend approved in the plan:
    ```bash
    # Claude Code (default) — one-line first message, no single quotes inside it
-   mux open --mux <M> --label "w/<TASK_SLUG>" --cwd "$HOME/w/<TASK_SLUG>" \
-     --run 'cd "$HOME/w/<TASK_SLUG>" && claude --name "<TASK_SLUG>" "You are the dedicated session for task <TASK_SLUG> (<TASK_TYPE>). Read ./HANDOFF.md now. The environment is already bootstrapped: do not re-create assets. Reply with a 5-line summary of the task, then wait for my instructions. When I ask you to work on it, use the rpc-do-task skill."'
+   mux open --mux <M> --label "w/<TASK_SLUG>" --cwd "$HOME/w/tasks/<TASK_SLUG>" \
+     --run 'cd "$HOME/w/tasks/<TASK_SLUG>" && claude --name "<TASK_SLUG>" "You are the dedicated session for task <TASK_SLUG> (<TASK_TYPE>). Read ./HANDOFF.md now. The environment is already bootstrapped: do not re-create assets. Reply with a 5-line summary of the task, then wait for my instructions. When I ask you to work on it, use the rpc-do-task skill."'
    ```
    For pi, the same with the launch command
-   `cd "$HOME/w/<TASK_SLUG>" && pi --session-id "<TASK_SLUG>" --name "<TASK_SLUG>" "<same message>"`
+   `cd "$HOME/w/tasks/<TASK_SLUG>" && pi --session-id "<TASK_SLUG>" --name "<TASK_SLUG>" "<same message>"`
    (`--session-id` creates the session, or resumes it if it already exists).
    If a Claude Code session named `<TASK_SLUG>` already exists for this folder
    (a `"customTitle":"<TASK_SLUG>"` match in
    `~/.claude/projects/<folder path with / and . replaced by ->/*.jsonl`),
-   resume it instead: `--run 'claude_session "$HOME/w/<TASK_SLUG>" "<TASK_SLUG>"'`.
+   resume it instead: `--run 'claude_session "$HOME/w/tasks/<TASK_SLUG>" "<TASK_SLUG>"'`.
    `skipped` in the output means an agent was already running: report it,
    don't retry. Record the backend in the manifest (`mux: <M>`).
+8. **Vault card** — if `$HOME/w/notes` exists, create
+   `$HOME/w/notes/01_Projects/Tasks/<TASK_SLUG>.md` from the *While active*
+   template in CONVENTIONS §8 (skip it if it already exists) and record its
+   path as `vault_note:` in the manifest. No vault on this machine → skip and
+   say so in the report.
 
 ### 7. Report
 
 A result table (created / reused / skipped / failed), plus:
-- the workspace file to open: `cursor "$HOME/w/<TASK_SLUG>/<TASK_SLUG>.code-workspace"`
+- the workspace file to open: `cursor "$HOME/w/tasks/<TASK_SLUG>/<TASK_SLUG>.code-workspace"`
   (or `code`; for a cross-repository/fork PR recommend `code`, whose Workspace
   Trust opens untrusted code in Restricted Mode);
 - where the session lives: herdr — workspace `w/<TASK_SLUG>` (sidebar or the

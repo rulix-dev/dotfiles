@@ -1,0 +1,18 @@
+{
+  "extraKnownMarketplaces": {
+    "datadog-claude-plugins": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/ddoghq/claude-marketplace.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "dd@datadog-claude-plugins": true,
+    "go-code-reviewer@datadog-claude-plugins": true,
+    "kv-platform@datadog-claude-plugins": true,
+    "perf-feedback@datadog-claude-plugins": true,
+    "marketplace-auto-update@datadog-claude-plugins": true,
+    "work-vault@datadog-claude-plugins": true
+  }
+}
