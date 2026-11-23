@@ -10,13 +10,17 @@
 `rcode` in a workspace sends one JSON request per connection through an SSH
 RemoteForward (workspace 127.0.0.1:47011 -> this Unix socket):
 
-  {"v": 1, "host": "workspace-NAME", "path": "/abs/path", "line": 12, "col": 3,
-   "editor": "vscode"}
+  {"v": 1, "host": "workspace-NAME", "path": "/abs/path", "kind": "file",
+   "line": 12, "col": 3, "editor": "vscode", "new_window": false}
 
 The listener validates every field, builds the editor URL itself
-(vscode://vscode-remote/ssh-remote+HOST/PATH[:LINE[:COL]]) and opens it with
-/usr/bin/open: fixed program and arguments, no shell. A workspace can only ask
-to open a path in an editor on a workspace-* host; nothing else.
+(vscode://vscode-remote/ssh-remote+HOST/PATH[:LINE[:COL]][?windowId=_blank])
+and opens it with /usr/bin/open: fixed program and arguments, no shell. A
+workspace can only ask to open a path in an editor on a workspace-* host.
+
+VS Code reads the URL as a workspace when the path ends in .code-workspace, as
+a file when it ends in :LINE, and as a folder otherwise, so files always get a
+line (1 by default). windowId=_blank forces a new window.
 
   RCODE_SOCKET            socket path (default ~/.rcode/rcode.sock)
   RCODE_LISTENER_OPENER   program used to open the URL (default /usr/bin/open)
@@ -67,6 +71,14 @@ def build_url(req):
         raise Rejected("path must be an absolute path")
     if any(ord(c) < 32 or ord(c) == 127 for c in path):
         raise Rejected("path contains control characters")
+    kind = req.get("kind", "folder")
+    if kind not in ("folder", "file"):
+        raise Rejected("kind must be folder or file")
+    new_window = req.get("new_window", False)
+    if not isinstance(new_window, bool):
+        raise Rejected("new_window must be true or false")
+    if kind == "file" and req.get("line") is None and not path.endswith(".code-workspace"):
+        req = {**req, "line": 1}  # without :LINE VS Code would open a file as a folder
     suffix = ""
     for key in ("line", "col"):
         value = req.get(key)
@@ -78,7 +90,8 @@ def build_url(req):
     if req.get("col") is not None and req.get("line") is None:
         raise Rejected("col needs line")
     path = posixpath.normpath(path)
-    return f"{EDITORS[editor]}://vscode-remote/ssh-remote+{host}{quote(path)}{suffix}"
+    query = "?windowId=_blank" if new_window else ""
+    return f"{EDITORS[editor]}://vscode-remote/ssh-remote+{host}{quote(path)}{suffix}{query}"
 
 
 def handle(conn, recent):

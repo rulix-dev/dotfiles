@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """rcode - open workspace paths in the Mac's VS Code (or Cursor) over Remote-SSH.
 
-  rcode [PATH[:LINE[:COL]] ...]     default: the current directory
+  rcode [-r|--reuse] [-F|--folder] [PATH[:LINE[:COL]] ...]   default: .
 
 Sends each path through the SSH tunnel to `rcode-listener` on the Mac
 (RemoteForward 127.0.0.1:47011, see `rcode-listener ssh-config`), which opens
 vscode://vscode-remote/ssh-remote+<host><path>. Without the tunnel it prints a
 clickable link instead (Cmd+click in the terminal).
+
+  - a directory with exactly one *.code-workspace opens that workspace
+    (all its folders, e.g. the task folder and its worktrees); -F opens the
+    plain folder instead
+  - folders and workspaces open in a new window; -r reuses the current one
+  - files open in the current window, at LINE:COL when given
 
   RCODE_EDITOR    vscode (default) | cursor
   RCODE_SSH_HOST  SSH alias of this workspace on the Mac
@@ -31,9 +37,22 @@ def target(arg):
     return os.path.abspath(arg), None, None
 
 
-def url_for(editor, host, path, line, col):
+def workspace_file(directory):
+    """The single *.code-workspace in a directory, if there is exactly one."""
+    try:
+        found = [f for f in os.listdir(directory) if f.endswith(".code-workspace")]
+    except OSError:
+        return None
+    return os.path.join(directory, found[0]) if len(found) == 1 else None
+
+
+def url_for(request):
+    path, line, col = request["path"], request.get("line"), request.get("col")
+    if request["kind"] == "file" and not line and not path.endswith(".code-workspace"):
+        line = 1
     suffix = (f":{line}" if line else "") + (f":{col}" if line and col else "")
-    return f"{SCHEMES[editor]}://vscode-remote/ssh-remote+{host}{quote(path)}{suffix}"
+    query = "?windowId=_blank" if request.get("new_window") else ""
+    return f"{request['editor']}://vscode-remote/ssh-remote+{request['host']}{quote(path)}{suffix}{query}"
 
 
 def send(port, request):
@@ -54,10 +73,22 @@ def send(port, request):
 
 
 def main():
-    args = sys.argv[1:] or ["."]
-    if args[0] in ("-h", "--help"):
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0
+    reuse = folder_only = False
+    while args and args[0].startswith("-") and args[0] != "-":
+        flag = args.pop(0)
+        if flag in ("-r", "--reuse"):
+            reuse = True
+        elif flag in ("-F", "--folder"):
+            folder_only = True
+        elif flag == "--":
+            break
+        else:
+            sys.exit(f"rcode: unknown option {flag} (see rcode --help)")
+    args = args or ["."]
     editor = os.environ.get("RCODE_EDITOR", "vscode")
     if editor not in SCHEMES:
         sys.exit(f"rcode: unknown RCODE_EDITOR {editor!r} (vscode or cursor)")
@@ -75,7 +106,15 @@ def main():
             print(f"rcode: {arg}: no such file or directory", file=sys.stderr)
             status = 1
             continue
-        request = {"v": 1, "host": host, "path": path, "editor": editor}
+        kind = "folder" if os.path.isdir(path) else "file"
+        if kind == "folder" and not folder_only:
+            ws = workspace_file(path)
+            if ws:
+                path, kind = ws, "file"
+                print(f"rcode: opening workspace {os.path.basename(ws)} (-F for the plain folder)", file=sys.stderr)
+        opens_window = kind == "folder" or path.endswith(".code-workspace")
+        request = {"v": 1, "host": host, "path": path, "kind": kind, "editor": editor,
+                   "new_window": opens_window and not reuse}
         if line:
             request["line"] = line
             if col:
@@ -88,10 +127,12 @@ def main():
             status = 1
             continue
         # No tunnel: fall back to a clickable link (OSC 8) plus the plain URL.
-        url = url_for(editor, host, path, line, col)
+        url = url_for(request)
         if not warned:
-            print(f"rcode: no tunnel on 127.0.0.1:{port} (is rcode-listener running and the SSH "
-                  "connection opened after adding the RemoteForward?). Cmd+click to open:", file=sys.stderr)
+            print(f"rcode: no tunnel on 127.0.0.1:{port}. Is rcode-listener running on the Mac? If it worked "
+                  "before, the SSH connection holding the tunnel closed: on the Mac run\n"
+                  f"  pkill -f 'ssh.*{host}'\n"
+                  "(herdr reconnects on its own). Meanwhile, Cmd+click to open:", file=sys.stderr)
             warned = True
         label = arg if sys.stdout.isatty() else url
         print(f"\033]8;;{url}\033\\{label}\033]8;;\033\\" if sys.stdout.isatty() else url)
