@@ -178,7 +178,7 @@ __rulix_dev_claude_mcp_sync() {
   # name / JSON pairs, in the order they should appear. Slack and the browser
   # (Playwright) come from plugins enabled in settings.rpc.json instead.
   local -a servers=(
-    atlassian        '{"type":"http","url":"https://mcp.atlassian.com/v1/mcp/authv2"}'
+    atlassian        '{"type":"http","url":"https://mcp.atlassian.com/v2/mcp"}'
     datadog-us       '{"type":"http","url":"https://mcp.datadoghq.com/v1/mcp?toolsets='$dd_toolsets'"}'
     datadog-eu       '{"type":"http","url":"https://mcp.datadoghq.eu/v1/mcp?toolsets='$dd_toolsets'"}'
     google-workspace '{"type":"http","url":"https://google-workspace-mcp-server-834963730936.us-central1.run.app/mcp"}'
@@ -225,6 +225,18 @@ __rulix_dev_pi_setup() {
 
   __rulix_dev_merge_json "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/settings.rpc.json"
   __rulix_dev_merge_json "$HOME/.pi/agent/mcp-adapter.json" "$HOME/.pi/agent/mcp-adapter.rpc.json"
+
+  # An empty ~/.pi/agent/mcp.json (pi's built-in MCP config) makes
+  # `pi-setup doctor` warn about a legacy file: drop it, but keep one that
+  # declares servers so nothing of ours is lost.
+  local legacy_mcp="$HOME/.pi/agent/mcp.json"
+  if [[ -f "$legacy_mcp" ]]; then
+    if jq -e '(.mcpServers // {}) | length == 0' "$legacy_mcp" &>/dev/null; then
+      rm -f "$legacy_mcp"
+    else
+      echo "WARN: $legacy_mcp declares MCP servers: move them to mcp-adapter.json and delete it" >&2
+    fi
+  fi
 
   echo "pi: check with 'pi-setup doctor', then authenticate MCP servers inside pi with /mcp-auth <server>"
 }
