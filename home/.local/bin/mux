@@ -501,7 +501,9 @@ def pick_herdr():
         "--height", "100%" if in_herdr() and os.environ.get("HERDR_ENV") != "1" else "60%",
         "--reverse", "--ansi", "--no-sort", "--border-label", " herdr ", "--border", "--prompt", "⚡  ",
         "--delimiter", "\t", "--with-nth", "1",
-        "--header", "  ^a all ^w spaces ^x dirs ^t tmux→herdr ^f find ^d close",
+        "--header", "  ^a all ^w spaces ^x dirs ^t tmux→herdr ^f find ^d close"
+                    + (" ^o editor" if rcode_available() else ""),
+        *(["--bind", f"ctrl-o:execute({me} _rcode {{2}})"] if rcode_available() else []),
         "--bind", "tab:down,btab:up",
         "--bind", f"ctrl-a:change-prompt(⚡  )+reload({me} _list herdr all)",
         "--bind", f"ctrl-w:change-prompt(◆  )+reload({me} _list herdr workspaces)",
@@ -700,6 +702,38 @@ def close_session(which, label):
     return {"label": label, "closed": closed}
 
 
+# --------------------------------------------------------------------------- rcode
+
+def rcode_available():
+    """rcode opens a workspace path in the Mac's editor: only meaningful on a workspace."""
+    return bool(shutil.which("rcode") and (os.environ.get("WORKSPACE_NAME") or os.environ.get("RCODE_SSH_HOST")))
+
+
+def key_dir(key):
+    """Directory behind a picker key (ws:<id>, dir:<path>, tmux:<session>)."""
+    kind, _, value = key.partition(":")
+    if kind == "dir":
+        return value
+    if kind == "ws":
+        w = next((w for w in herdr_workspaces() if w["workspace_id"] == value), None)
+        return w["cwd"] if w else None
+    if kind == "tmux":
+        s = next((s for s in tmux_sessions() if s["name"] == value), None)
+        return s["path"] if s else None
+    return None
+
+
+def rcode_open(path):
+    """Open a directory with rcode; keep the error on screen when it fails."""
+    if not path or not os.path.isdir(path):
+        prompt(f"rcode: not a directory: {path}. Enter to continue… ")
+        return
+    p = run(["rcode", path], check=False)
+    if p.returncode != 0:
+        sys.stderr.write((p.stderr or "") + (p.stdout or ""))
+        prompt("Enter to continue… ")
+
+
 # --------------------------------------------------------------------------- palette
 
 # Client-only herdr actions: not in the API, so the palette can only remind the key.
@@ -763,6 +797,11 @@ def palette_entries(ctx):
     add("space", f"Rename workspace {ctx['label']}…", "ws:rename")
     add("space", f"Close workspace {ctx['label']}", "ws:close", "kills its panes")
     add("agent", "Go to agent…", "agent:goto")
+    if rcode_available():
+        add("editor", "Open this directory in VS Code (rcode)", "rcode:cwd",
+            f"{tilde(ctx['cwd'])} · its .code-workspace if it has one")
+        add("editor", "Open a directory in VS Code… (rcode)", "rcode:pick",
+            "workspaces and recent dirs · new window")
     add("tab", "New tab here", "tab:new", tilde(ctx["cwd"]))
     add("tab", "Rename tab…", "tab:rename")
     add("tab", "Close tab", "tab:close", "kills its panes")
@@ -855,6 +894,14 @@ def run_palette_action(action, ctx):
         pane = fzf_choose(lines, "agents")
         if pane:
             herdr("agent", "focus", pane)
+    elif action == "rcode:cwd":
+        rcode_open(ctx["cwd"])
+    elif action == "rcode:pick":
+        ws_lines = [f"{C['mag']}◆{C['off']} {w['label']}  {C['dim']}{tilde(w['cwd'])}{C['off']}\tdir:{w['cwd']}"
+                    for w in herdr_workspaces() if w["cwd"]]
+        key = fzf_choose(ws_lines + list_herdr("dirs"), "open in VS Code")
+        if key:
+            rcode_open(key.split(":", 1)[1])
     elif action == "tab:new":
         herdr("tab", "create", "--workspace", ctx["ws"], "--cwd", ctx["cwd"], "--focus")
     elif action == "tab:rename":
@@ -922,6 +969,8 @@ def main():
     sub.add_parser("_find-plain")
     p = sub.add_parser("_preview")
     p.add_argument("key")
+    p = sub.add_parser("_rcode")
+    p.add_argument("key")
     p = sub.add_parser("_kill")
     p.add_argument("key")
     a = ap.parse_args()
@@ -951,6 +1000,8 @@ def main():
             print("\n".join(find_dirs()))
         elif a.cmd == "_preview":
             preview(a.key)
+        elif a.cmd == "_rcode":
+            rcode_open(key_dir(a.key))
         elif a.cmd == "_kill":
             kill(a.key)
     except MuxError as e:
