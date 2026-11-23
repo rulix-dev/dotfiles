@@ -5,9 +5,26 @@
 # path goes stale and git signing/auth breaks ("could not connect to agent").
 # Keep a fixed symlink that each fresh login refreshes, and always point this
 # shell at it so the path never goes stale.
-if [[ -S "$SSH_AUTH_SOCK" && "$SSH_AUTH_SOCK" != "$HOME/.ssh/agent.sock" ]]; then
-  ln -sf "$SSH_AUTH_SOCK" "$HOME/.ssh/agent.sock"
+# Link to the *resolved* socket: herdr (and tmux setups like it) hand shells
+# their own stable symlink that itself points at ~/.ssh/agent.sock, and linking
+# to that would make ~/.ssh/agent.sock point at itself (a loop: no agent, no
+# git signing). ${...:A} follows the whole chain; a loop doesn't resolve to a
+# socket, so it is skipped.
+if [[ -n "$SSH_AUTH_SOCK" && "$SSH_AUTH_SOCK" != "$HOME/.ssh/agent.sock" ]]; then
+  __rulix_dev_real_sock=${SSH_AUTH_SOCK:A}
+  if [[ -S "$__rulix_dev_real_sock" && "$__rulix_dev_real_sock" != "$HOME/.ssh/agent.sock" ]]; then
+    ln -sfn "$__rulix_dev_real_sock" "$HOME/.ssh/agent.sock"
+  fi
+  unset __rulix_dev_real_sock
 fi
+# A broken or looping link (e.g. left by an older version of this block) heals
+# itself on the Mac: fall back to the 1Password agent, the IdentityAgent in
+# ~/.ssh/config, which holds the git signing keys.
+__rulix_dev_op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+if [[ ! -S "$HOME/.ssh/agent.sock" && -S "$__rulix_dev_op_sock" ]]; then
+  ln -sfn "$__rulix_dev_op_sock" "$HOME/.ssh/agent.sock"
+fi
+unset __rulix_dev_op_sock
 [[ -S "$HOME/.ssh/agent.sock" ]] && export SSH_AUTH_SOCK="$HOME/.ssh/agent.sock"
 # -----------------------------------------------------------------------------
 
