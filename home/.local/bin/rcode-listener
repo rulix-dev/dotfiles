@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""rcode-listener - Mac side of `rcode`: open workspace paths in VS Code / Cursor.
+
+  rcode-listener install      install and start the LaunchAgent (macOS)
+  rcode-listener uninstall    stop and remove it
+  rcode-listener status       LaunchAgent state + a ping through the socket
+  rcode-listener ssh-config   print the ~/.ssh/config block for the tunnel
+  rcode-listener serve        run in the foreground (what the LaunchAgent runs)
+
+`rcode` in a workspace sends one JSON request per connection through an SSH
+RemoteForward (workspace 127.0.0.1:47011 -> this Unix socket):
+
+  {"v": 1, "host": "workspace-NAME", "path": "/abs/path", "line": 12, "col": 3,
+   "editor": "vscode"}
+
+The listener validates every field, builds the editor URL itself
+(vscode://vscode-remote/ssh-remote+HOST/PATH[:LINE[:COL]]) and opens it with
+/usr/bin/open: fixed program and arguments, no shell. A workspace can only ask
+to open a path in an editor on a workspace-* host; nothing else.
+
+  RCODE_SOCKET            socket path (default ~/.rcode/rcode.sock)
+  RCODE_LISTENER_OPENER   program used to open the URL (default /usr/bin/open)
+"""
+import json
+import os
+import posixpath
+import re
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+from urllib.parse import quote
+
+HOME = Path.home()
+SOCKET_PATH = Path(os.environ.get("RCODE_SOCKET") or HOME / ".rcode" / "rcode.sock")
+OPENER = os.environ.get("RCODE_LISTENER_OPENER", "/usr/bin/open")
+LABEL = "dev.rulix.rcode-listener"
+PLIST = HOME / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+LOG = HOME / "Library" / "Logs" / "rcode-listener.log"
+PORT = 47011
+
+HOST_RE = re.compile(r"^workspace-[a-z0-9][a-z0-9-]{0,62}$")
+EDITORS = {"vscode": "vscode", "cursor": "cursor"}
+MAX_REQUEST = 8192
+MAX_PATH = 4096
+RATE_WINDOW, RATE_MAX = 10.0, 20  # at most 20 opens per 10 s
+
+
+class Rejected(Exception):
+    pass
+
+
+def log(msg):
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
+
+
+def build_url(req):
+    if not isinstance(req, dict) or req.get("v") != 1:
+        raise Rejected("unsupported request version")
+    host, path, editor = req.get("host"), req.get("path"), req.get("editor", "vscode")
+    if not isinstance(host, str) or not HOST_RE.match(host):
+        raise Rejected("host must look like workspace-<name>")
+    if editor not in EDITORS:
+        raise Rejected(f"editor must be one of {', '.join(EDITORS)}")
+    if not isinstance(path, str) or not path.startswith("/") or len(path) > MAX_PATH:
+        raise Rejected("path must be an absolute path")
+    if any(ord(c) < 32 or ord(c) == 127 for c in path):
+        raise Rejected("path contains control characters")
+    suffix = ""
+    for key in ("line", "col"):
+        value = req.get(key)
+        if value is None:
+            break
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 10_000_000:
+            raise Rejected(f"{key} must be a positive integer")
+        suffix += f":{value}"
+    if req.get("col") is not None and req.get("line") is None:
+        raise Rejected("col needs line")
+    path = posixpath.normpath(path)
+    return f"{EDITORS[editor]}://vscode-remote/ssh-remote+{host}{quote(path)}{suffix}"
+
+
+def handle(conn, recent):
+    conn.settimeout(5)
+    data = b""
+    while b"\n" not in data and len(data) <= MAX_REQUEST:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    try:
+        if len(data) > MAX_REQUEST:
+            raise Rejected("request too large")
+        try:
+            req = json.loads(data.split(b"\n", 1)[0] or b"null")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise Rejected("request is not JSON")
+        if isinstance(req, dict) and req.get("ping"):
+            return {"ok": True, "pong": True}
+        url = build_url(req)
+        now = time.monotonic()
+        recent[:] = [t for t in recent if now - t < RATE_WINDOW]
+        if len(recent) >= RATE_MAX:
+            raise Rejected("too many requests, try again in a few seconds")
+        recent.append(now)
+        result = subprocess.run([OPENER, url], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=15)
+        if result.returncode != 0:
+            log(f"open failed ({result.returncode}): {url}: {result.stderr.strip()}")
+            return {"ok": False, "error": f"open failed: {result.stderr.strip() or result.returncode}"}
+        log(f"opened {url}")
+        return {"ok": True, "url": url}
+    except Rejected as e:
+        log(f"rejected: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def serve():
+    SOCKET_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(SOCKET_PATH.parent, 0o700)
+    if SOCKET_PATH.exists() or SOCKET_PATH.is_symlink():
+        SOCKET_PATH.unlink()
+    old_umask = os.umask(0o077)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(SOCKET_PATH))
+    os.umask(old_umask)
+    os.chmod(SOCKET_PATH, 0o600)
+    server.listen(8)
+    log(f"listening on {SOCKET_PATH}")
+    recent = []
+    while True:
+        conn, _ = server.accept()
+        with conn:
+            try:
+                reply = handle(conn, recent)
+                conn.sendall((json.dumps(reply) + "\n").encode())
+            except (OSError, subprocess.SubprocessError) as e:
+                log(f"connection error: {e}")
+
+
+def ssh_config():
+    return f"""# rcode: let workspaces open paths in this Mac's VS Code / Cursor
+Host workspace-*
+    RemoteForward 127.0.0.1:{PORT} {SOCKET_PATH}"""
+
+
+def launchctl(*args):
+    return subprocess.run(["launchctl", *args], capture_output=True, text=True)
+
+
+def install():
+    if sys.platform != "darwin":
+        sys.exit("rcode-listener install is for macOS")
+    script = os.path.realpath(__file__)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    PLIST.parent.mkdir(parents=True, exist_ok=True)
+    PLIST.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/usr/bin/python3</string><string>{script}</string><string>serve</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{LOG}</string>
+  <key>StandardErrorPath</key><string>{LOG}</string>
+</dict>
+</plist>
+""")
+    domain = f"gui/{os.getuid()}"
+    launchctl("bootout", f"{domain}/{LABEL}")
+    result = launchctl("bootstrap", domain, str(PLIST))
+    if result.returncode != 0:
+        sys.exit(f"launchctl bootstrap failed: {result.stderr.strip()}")
+    for _ in range(30):
+        if SOCKET_PATH.exists():
+            break
+        time.sleep(0.1)
+    print(f"installed {PLIST}\nlog: {LOG}\n")
+    print("Add this to ~/.ssh/config (then reconnect to your workspaces):\n")
+    print(ssh_config())
+
+
+def uninstall():
+    launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
+    for f in (PLIST, SOCKET_PATH):
+        if f.exists():
+            f.unlink()
+    print("uninstalled (remove the RemoteForward block from ~/.ssh/config if you added it)")
+
+
+def ping():
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(str(SOCKET_PATH))
+            s.sendall(b'{"ping": true}\n')
+            return json.loads(s.recv(4096).decode().split("\n", 1)[0]).get("pong") is True
+    except (OSError, ValueError):
+        return False
+
+
+def status():
+    if sys.platform == "darwin":
+        state = launchctl("print", f"gui/{os.getuid()}/{LABEL}")
+        line = next((l.strip() for l in state.stdout.splitlines() if l.strip().startswith("state =")), None)
+        print(f"LaunchAgent: {line or 'not loaded'}")
+    print(f"socket:      {SOCKET_PATH} ({'answers' if ping() else 'not answering'})")
+    print(f"log:         {LOG}")
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "-h"
+    actions = {"serve": serve, "install": install, "uninstall": uninstall, "status": status,
+               "ssh-config": lambda: print(ssh_config())}
+    if cmd not in actions:
+        print(__doc__.strip())
+        sys.exit(0 if cmd in ("-h", "--help") else 2)
+    actions[cmd]()
+
+
+if __name__ == "__main__":
+    main()
